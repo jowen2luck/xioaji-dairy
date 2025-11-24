@@ -12,7 +12,7 @@ export type BaseURLEntry = {
 export type AssistantConfig = {
   selectedBaseURL: string
   selectedModel: string
-  baseURLs: BaseURLEntry[]
+  baseURLs?: BaseURLEntry[]
   temperature: number
   top_p: number
   enabledTools: string[]
@@ -21,14 +21,25 @@ export type AssistantConfig = {
     recentIntents: string[]
     lastUsedTools: string[]
   }
+  intentModel?: string
 }
 
 const LS_KEY = 'assistant-config'
   
 
 export const DEFAULT_CONFIG: AssistantConfig = {
-  model: 'qwen3-next-80b-a3b-instruct',
-  baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  selectedBaseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  selectedModel: 'qwen3-next-80b-a3b-instruct',
+  baseURLs: [
+    {
+      url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      models: ['qwen3-next-80b-a3b-instruct', 'qwen-long', 'qwen-turbo']
+    },
+    {
+      url: 'https://api.openai.com/v1',
+      models: ['gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo']
+    }
+  ],
   temperature: 0.7,
   top_p: 0.9,
   enabledTools: ['search_records'],

@@ -179,14 +179,16 @@ watch(() => config.value.intentModel, (val) => {
 const modelOptions = ref([])
 
 const baseURLOptions = computed(() => {
-  return DEFAULT_CONFIG.baseURLs.map(entry => ({
+  const urls = DEFAULT_CONFIG.baseURLs || []
+  return urls.map(entry => ({
     label: entry.url,
     value: entry.url
   }))
 })
 
 const currentModels = computed(() => {
-  const selectedEntry = DEFAULT_CONFIG.baseURLs.find(entry => entry.url === config.value.selectedBaseURL)
+  const urls = DEFAULT_CONFIG.baseURLs || []
+  const selectedEntry = urls.find(entry => entry.url === config.value.selectedBaseURL)
   return (selectedEntry?.models || []).map(model => ({
     label: model,
     value: model
@@ -325,8 +327,8 @@ async function send() {
     try {
       synth = await window.assistant?.chat?.({
         messages: synthMessages,
-        model: config.value.model,
-        baseURL: config.value.baseURL,
+        model: config.value.selectedModel,
+        baseURL: config.value.selectedBaseURL,
         tools: [],
         userQuery: '',
         config: { temperature: config.value.temperature, top_p: config.value.top_p },
