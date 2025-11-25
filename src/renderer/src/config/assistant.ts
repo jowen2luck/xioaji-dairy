@@ -72,13 +72,13 @@ export const DEFAULT_CONFIG: AssistantConfig = {
 
     },
 
-    {
+    // {
 
-      url: 'https://api.openai.com/v1',
+    //   url: 'https://api.openai.com/v1',
 
-      models: ['gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo']
+    //   models: ['gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo']
 
-    }
+    // }
 
   ],
 

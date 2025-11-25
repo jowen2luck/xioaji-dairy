@@ -45,7 +45,7 @@ export class AgentExecutor {
   }
 
   /**
-   * 主执行方法
+   * 主执行方法 - ReAct 模式
    * @param {Object} params - 执行参数
    * @param {Array} params.messages - 消息历史
    * @param {String} params.systemPrompt - 系统提示词
@@ -63,7 +63,7 @@ export class AgentExecutor {
       maxIterations = 3
     } = params
 
-    console.log('[AgentExecutor] Starting execution', {
+    console.log('[AgentExecutor] Starting ReAct execution', {
       userQuery,
       enabledTools,
       maxIterations
@@ -83,43 +83,95 @@ export class AgentExecutor {
       // 2. 获取可用工具
       const tools = this.buildToolsForLLM(enabledTools)
 
-      // 3. 第一次调用 LLM（带工具）
-      console.log('[AgentExecutor] First LLM call with tools')
-      const firstResponse = await this.executeWithTools(formattedMessages, tools)
+      // 3. ReAct 循环：持续推理和行动直到得出最终答案
+      let currentMessages = [...formattedMessages]
+      let iteration = 0
 
-      // 4. 处理工具调用
-      const toolCalls = this.extractToolCalls(firstResponse)
-      
-      if (!toolCalls || toolCalls.length === 0) {
-        // 没有工具调用，直接返回结果
-        console.log('[AgentExecutor] No tool calls, returning direct response')
-        const content = this.extractContent(firstResponse)
-        
-        return {
-          success: true,
-          content,
-          raw: firstResponse,
-          state: this.state,
-          duration: Date.now() - startTime
+      while (iteration < maxIterations) {
+        iteration++
+        console.log(`[AgentExecutor] === ReAct Iteration ${iteration}/${maxIterations} ===`)
+        this.state.iteration = iteration
+
+        // 3.1 调用 LLM（带工具）
+        console.log(`[AgentExecutor] Iteration ${iteration}: Calling LLM with tools`)
+        const response = await this.executeWithTools(currentMessages, tools)
+
+        // 3.2 检查是否有工具调用
+        const toolCalls = this.extractToolCalls(response)
+
+        if (!toolCalls || toolCalls.length === 0) {
+          // 没有工具调用 = LLM 认为已经有足够信息给出最终答案
+          console.log(`[AgentExecutor] Iteration ${iteration}: No tool calls, task complete`)
+          const content = this.extractContent(response)
+
+          // 记录本轮步骤
+          this.state.steps.push({
+            iteration,
+            action: 'final_answer',
+            reasoning: content
+          })
+
+          return {
+            success: true,
+            content,
+            raw: response,
+            state: this.state,
+            duration: Date.now() - startTime
+          }
         }
+
+        // 3.3 执行工具调用
+        console.log(`[AgentExecutor] Iteration ${iteration}: Executing ${toolCalls.length} tool(s)`)
+        const toolResults = await this.handleToolCalls(toolCalls)
+
+        // 记录本轮步骤
+        this.state.steps.push({
+          iteration,
+          action: 'tool_calls',
+          tools: toolCalls.map(tc => tc.name),
+          results: toolResults
+        })
+
+        // 3.4 将工具调用和结果添加到消息历史
+        currentMessages.push({
+          role: 'assistant',
+          content: response.content || '我需要使用工具来获取信息。',
+          tool_calls: toolCalls.map(tc => ({
+            id: tc.id,
+            type: 'function',
+            function: {
+              name: tc.name,
+              arguments: typeof tc.args === 'string' ? tc.args : JSON.stringify(tc.args)
+            }
+          }))
+        })
+
+        // 3.5 添加工具结果（返回数组，需要展开）
+        const toolResultMessages = this.buildToolResultMessage(toolResults)
+        currentMessages.push(...toolResultMessages)  // 使用展开运算符
+        this.state.messageHistory = currentMessages
+
+        console.log(`[AgentExecutor] Iteration ${iteration}: Tool results added, continuing to next iteration`)
       }
 
-      // 5. 执行工具调用
-      console.log('[AgentExecutor] Executing tool calls', toolCalls.length)
-      const toolResults = await this.handleToolCalls(toolCalls)
-      this.state.toolResults = toolResults
+      // 达到最大迭代次数，强制要求 LLM 给出最终答案
+      console.log(`[AgentExecutor] Max iterations (${maxIterations}) reached, forcing final answer`)
+      
+      currentMessages.push({
+        role: 'user',
+        content: '请基于以上信息给出最终答案，不要再调用工具。'
+      })
 
-      // 6. 构建工具结果消息
-      const toolResultMessage = this.buildToolResultMessage(toolResults)
-      this.state.messageHistory.push(toolResultMessage)
+      const finalResponse = await this.executeWithTools(currentMessages, [])
+      const finalContent = this.extractContent(finalResponse)
 
-      // 7. 返回结果（不再调用第二次 LLM，由上层决定）
       return {
         success: true,
-        content: '',  // 工具调用阶段不生成最终内容
-        raw: firstResponse,
+        content: finalContent,
+        raw: finalResponse,
         state: this.state,
-        duration: Date.now() - startTime
+        duration: Date.now() - startTime,
+        maxIterationsReached: true
       }
 
     } catch (error) {
@@ -147,31 +199,55 @@ export class AgentExecutor {
    */
   async executeWithTools(messages, tools) {
     try {
-      // 构建 LLM 调用参数
-      const params = {
-        messages,
-        temperature: this.config.temperature,
-        top_p: this.config.top_p
-      }
-
-      // 如果有工具，添加到参数中
-      if (tools && tools.length > 0) {
-        params.tools = tools
-        params.tool_choice = 'auto'
-      }
-
       console.log('[AgentExecutor] Calling LLM with params:', {
         messageCount: messages.length,
         toolCount: tools?.length || 0
       })
 
-      // 调用 LLM
-      const response = await this.llm.invoke(messages)
+      let response
+      
+      // 如果有工具，使用直接 API 调用
+      if (tools && tools.length > 0) {
+        console.log('[AgentExecutor] Using direct API call with tools:', tools.map(t => t.function.name))
+        
+        // 导入直接 API 调用函数
+        const { callOpenAIAPI } = await import('../llm/directOpenAI.js')
+        
+        const apiResponse = await callOpenAIAPI({
+          baseURL: this.config.baseURL || this.config.selectedBaseURL,
+          model: this.config.model || this.config.selectedModel,
+          messages: messages,
+          tools: tools,
+          temperature: this.config.temperature,
+          top_p: this.config.top_p
+        })
+        
+        // 转换为 LangChain 格式
+        response = {
+          content: apiResponse.content || '',
+          tool_calls: apiResponse.tool_calls || [],
+          raw: apiResponse
+        }
+        
+        console.log('[AgentExecutor] Direct API response:', {
+          hasContent: !!response.content,
+          hasToolCalls: !!(response.tool_calls && response.tool_calls.length > 0)
+        })
+      } else {
+        // 没有工具，使用 LangChain 调用
+        response = await this.llm.invoke(messages)
+      }
 
       console.log('[AgentExecutor] LLM response received:', {
         hasContent: !!response.content,
-        hasToolCalls: !!(response.tool_calls && response.tool_calls.length > 0)
+        hasToolCalls: !!(response.tool_calls && response.tool_calls.length > 0),
+        responseKeys: Object.keys(response)
       })
+      
+      // 输出完整响应用于调试
+      if (response.tool_calls && response.tool_calls.length > 0) {
+        console.log('[AgentExecutor] Tool calls detected:', JSON.stringify(response.tool_calls, null, 2))
+      }
 
       return response
 
@@ -329,24 +405,24 @@ export class AgentExecutor {
   }
 
   /**
-   * 构建工具结果消息
+   * 构建工具结果消息（OpenAI 格式）
    * @param {Array} toolResults - 工具调用结果
-   * @returns {Object} 消息对象
+   * @returns {Array} 消息对象数组（每个工具调用对应一个 tool 消息）
    */
   buildToolResultMessage(toolResults) {
-    const resultsText = toolResults.map(r => {
+    // OpenAI API 要求：每个 tool_call 必须有对应的 tool 消息
+    return toolResults.map(r => {
       const status = r.success ? '✓' : '✗'
       const resultText = typeof r.result === 'string' 
         ? r.result 
         : JSON.stringify(r.result, null, 2)
       
-      return `${status} ${r.name}:\n${resultText}`
-    }).join('\n\n')
-
-    return {
-      role: 'tool',
-      content: `工具调用结果：\n\n${resultsText}`
-    }
+      return {
+        role: 'tool',
+        tool_call_id: r.id,  // 必须匹配 tool_call 的 id
+        content: `${status} ${r.name}:\n${resultText}`
+      }
+    })
   }
 
   /**

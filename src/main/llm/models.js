@@ -39,21 +39,40 @@ function getAPIKeyForBaseURL(baseURL) {
 export function createChatModel(baseURL, model, options = {}) {
   const apiKey = getAPIKeyForBaseURL(baseURL)
   
+  console.log('[createChatModel] Configuration:', {
+    baseURL,
+    model,
+    hasAPIKey: !!apiKey,
+    apiKeyLength: apiKey?.length || 0
+  })
+  
   if (!apiKey) {
-    console.warn('Missing API key: set DASHSCOPE_API_KEY or OPENAI_API_KEY')
+    throw new Error(`Missing API key for baseURL: ${baseURL}. Please set DASHSCOPE_API_KEY_QWEN or OPENAI_API_KEY environment variable.`)
   }
 
-  return new ChatOpenAI({
-    openAIApiKey: apiKey,
+  const config = {
+    apiKey: apiKey,
     modelName: model,
-    basePath: baseURL,
     temperature: options.temperature ?? 0.7,
     topP: options.top_p ?? 0.9,
-    // 添加超时配置（单位：毫秒）
-    timeout: 30000,
-    // 添加 maxRetries 配置（避免无限重试）
-    maxRetries: 1,
-  })
+    timeout: 60000,  // 增加到60秒
+    maxRetries: 2,
+  }
+  
+  // 根据 LangChain 版本选择正确的 baseURL 配置方式
+  // 尝试多种配置方式以兼容不同版本
+  if (baseURL && baseURL !== 'https://api.openai.com/v1') {
+    // 方法1: 使用 configuration.baseURL
+    config.configuration = {
+      baseURL: baseURL
+    }
+    // 方法2: 同时设置 basePath (旧版本兼容)
+    config.basePath = baseURL
+  }
+  
+  console.log('[createChatModel] Final config:', JSON.stringify(config, null, 2))
+
+  return new ChatOpenAI(config)
 }
 
 /**

@@ -49,7 +49,16 @@ export function registerIPCHandlers(config = {}) {
 
       // 调试日志
       console.log('[IPC:chat] LLM created with model:', model, 'baseURL:', baseURL)
-      console.log('[IPC:chat] API Key present:', !!process.env.DASHSCOPE_API_KEY || !!process.env.OPENAI_API_KEY)
+      const apiKey = getAPIKeyForBaseURL(baseURL)
+      console.log('[IPC:chat] API Key for baseURL:', baseURL, 'present:', !!apiKey)
+      if (!apiKey) {
+        console.error('[IPC:chat] No API Key found! Checked env vars:', 
+          'DASHSCOPE_API_KEY_QWEN=' + (process.env.DASHSCOPE_API_KEY_QWEN ? 'SET' : 'NOT SET'),
+          'DASHSCOPE_API_KEY_SCTCLOUD=' + (process.env.DASHSCOPE_API_KEY_SCTCLOUD ? 'SET' : 'NOT SET'),
+          'OPENAI_API_KEY=' + (process.env.OPENAI_API_KEY ? 'SET' : 'NOT SET'),
+          'DASHSCOPE_API_KEY=' + (process.env.DASHSCOPE_API_KEY ? 'SET' : 'NOT SET')
+        )
+      }
       const toolRegistry = getToolRegistry()
 
       // 确定启用的工具
@@ -71,6 +80,7 @@ export function registerIPCHandlers(config = {}) {
         return {
           success: true,
           data: {
+            content: content,  // 添加 content 字段
             raw: response,
             toolResults: [],
             intentTools: [],
@@ -111,9 +121,11 @@ export function registerIPCHandlers(config = {}) {
       return {
         success: true,
         data: {
+          content: result.content,  // ReAct 最终答案
           raw: result.raw || { choices: [{ message: { content: result.content } }] },
           toolResults: result.state.toolResults || [],
           intentTools,
+          state: result.state,  // 包含完整的 ReAct 状态
           debug: {
             iterations: result.state.iteration,
             steps: result.state.steps,

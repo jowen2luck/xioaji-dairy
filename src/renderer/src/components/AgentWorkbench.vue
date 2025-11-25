@@ -306,10 +306,55 @@ async function send() {
       console.log('[think] extracted', extracted)
       if (extracted) steps.value.push({ type: 'think', name: '理解问题（解析结果）', result: extracted })
     }
-    const called = (result.data.toolResults || []).map(t => ({ name: TOOL_LABELS[t.name] || t.name, toolName: t.name, res: t.result }))
-    console.log('[tools] results', result.data.toolResults)
+
+    // ReAct 模式：从 state.steps 中提取工具调用信息
+    const stateSteps = result.data?.state?.steps || []
+    const toolSteps = stateSteps.filter(step => step.action === 'tool_calls')
+    const allToolResults = []
+    
+    // 收集所有迭代中的工具调用结果
+    toolSteps.forEach(step => {
+      if (step.results && Array.isArray(step.results)) {
+        allToolResults.push(...step.results)
+      }
+    })
+
+    console.log('[tools] ReAct steps:', stateSteps.length, 'tool results:', allToolResults.length)
+    
+    const called = allToolResults.map(t => ({ 
+      name: TOOL_LABELS[t.name] || t.name, 
+      toolName: t.name, 
+      res: t.result 
+    }))
+    
     called.forEach(c => steps.value.push({ type: 'tool', name: c.name, toolName: c.toolName, result: c.res }))
     traceSteps.value.push({ type: 'tool', title: '调用工具', detail: called.map(c => c.name).join('、') || '无' , time: new Date() })
+    
+    // ReAct 模式：最终答案可能直接在 content 中
+    const finalAnswer = result.data?.content
+    
+    if (finalAnswer) {
+      // ReAct 已经生成最终答案，直接展示
+      console.log('[ReAct] Final answer received, length:', finalAnswer.length)
+      const streamIndex = messages.value.length
+      messages.value.push({ content: '', sender: 'agent', time: new Date().toISOString(), isStreaming: true })
+      
+      const trace = [...steps.value]
+      trace.push({ type: 'final', name: '生成回复', result: finalAnswer })
+      
+      await streamMessageContent(streamIndex, finalAnswer)
+      messages.value[streamIndex].isStreaming = false
+      messages.value[streamIndex].toolTrace = trace
+      
+      try { localStorage.setItem('assistant-conversation', JSON.stringify(messages.value)) } catch {}
+      steps.value = []
+      await nextTick(); if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight
+      traceSteps.value.push({ type: 'result', title: '生成回复', detail: '完成', time: new Date() })
+      sending.value = false
+      return
+    }
+    
+    // 向后兼容：旧的单次工具调用模式
     const hasToolOutput = called.length > 0
     if (!hasToolOutput) {
       const msg = '未执行任何工具或未返回结果，已停止生成。'
@@ -320,7 +365,9 @@ async function send() {
       sending.value = false
       return
     }
-    const toolPayload = result.data.toolResults.map(t => ({ name: t.name, result: t.result }))
+    
+    // 旧模式：需要手动综合工具结果
+    const toolPayload = allToolResults.map(t => ({ name: t.name, result: t.result }))
     const synthMessages = [
       { role: 'system', content: `${config.value.systemPrompt}${sysinfo}。请基于下列工具输出，按照系统提示词回答用户的问题。` },
       { role: 'user', content: `用户问题：${text}\n工具输出：\n${JSON.stringify(toolPayload, null, 2)}` }
@@ -350,7 +397,7 @@ async function send() {
       sending.value = false
       return
     }
-    const final = synth?.data?.raw?.choices?.[0]?.message?.content
+    const final = synth?.data?.content || synth?.data?.raw?.choices?.[0]?.message?.content
     console.log('[synthesis] content', final)
     if (!final) {
       const msg = '模型未生成最终回答'
