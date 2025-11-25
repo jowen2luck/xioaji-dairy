@@ -33,8 +33,27 @@ export class ToolRegistry {
     return this.tools.get(name)
   }
 
+  // 添加 get 别名方法，与 AgentExecutor 中的调用保持一致
+  get(name) {
+    return this.tools.get(name)
+  }
+
   getAllTools() {
     return Array.from(this.tools.values())
+  }
+
+  // 添加 getAll 别名方法
+  getAll() {
+    return this.getAllTools()
+  }
+
+  // 添加工具调用方法
+  async invokeTool(name, args) {
+    const tool = this.tools.get(name)
+    if (!tool) {
+      throw new Error(`Tool '${name}' not found`)
+    }
+    return await tool.invoke(args)
   }
 
   getToolMetadata() {

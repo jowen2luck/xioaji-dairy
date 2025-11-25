@@ -76,9 +76,6 @@
       <n-grid-item :span="1">
         <n-card class="panel" title="配置">
           <n-form label-placement="top">
-            <n-form-item label="模型">
-              <n-select v-model:value="config.model" :options="modelOptions" />
-            </n-form-item>
             <n-form-item label="推理点 Base URL">
               <n-select v-model:value="config.selectedBaseURL" :options="baseURLOptions" />
             </n-form-item>
@@ -99,7 +96,11 @@
             </n-form-item>
             <n-form-item label="启用工具">
               <n-checkbox-group v-model:value="enabledTools">
-                <n-checkbox value="search_records">检索记录</n-checkbox>
+                <n-space vertical>
+                  <n-checkbox value="search_records">检索记录</n-checkbox>
+                  <n-checkbox value="query_records">查询记录</n-checkbox>
+                  <n-checkbox value="sql_analysis">SQL 分析</n-checkbox>
+                </n-space>
               </n-checkbox-group>
             </n-form-item>
             <n-space>
@@ -195,9 +196,13 @@ const currentModels = computed(() => {
   }))
 })
 
-// 根据用户要求，只默认启用检索记录工具
-const enabledTools = ref(['search_records'])
-const TOOL_LABELS = { search_records: '检索记录' }
+// 根据用户要求，默认启用三个工具
+const enabledTools = ref(['search_records', 'query_records', 'sql_analysis'])
+const TOOL_LABELS = { 
+  search_records: '检索记录',
+  query_records: '查询记录',
+  sql_analysis: 'SQL 分析'
+}
 const intentTags = ref([])
 const steps = ref([])
 

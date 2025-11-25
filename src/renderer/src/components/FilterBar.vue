@@ -9,6 +9,20 @@
       </n-button>
     </div>
     <div class="filter-item">
+      <n-button 
+        type="primary" 
+        size="large" 
+        @click="$emit('etl-enhance')"
+        :loading="etlProcessing"
+        :disabled="etlProcessing"
+      >
+        <template #icon>
+          <n-icon><SparklesOutline /></n-icon>
+        </template>
+        一键整理
+      </n-button>
+    </div>
+    <div class="filter-item">
       <n-input
         v-model:value="localValue.query"
         placeholder="输入关键词搜索感想"
@@ -48,7 +62,7 @@
 
 <script setup>
 import { reactive, watch } from 'vue'
-import { FolderOpenOutline, SearchOutline } from '@vicons/ionicons5'
+import { FolderOpenOutline, SearchOutline, SparklesOutline } from '@vicons/ionicons5'
 
 const props = defineProps({
   value: {
@@ -58,10 +72,14 @@ const props = defineProps({
   projectOptions: {
     type: Array,
     default: () => []
+  },
+  etlProcessing: {
+    type: Boolean,
+    default: false
   }
 })
 
-const emit = defineEmits(['update:value', 'import', 'reset'])
+const emit = defineEmits(['update:value', 'import', 'reset', 'etl-enhance'])
 
 const localValue = reactive({
   query: props.value.query,
