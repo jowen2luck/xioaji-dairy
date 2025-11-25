@@ -18,17 +18,27 @@ import { LLMEnricher } from './llmEnricher.js'
 import { loadAndEnrichData } from '../data/index.js'
 
 let enricherInstance = null
+let mainWindow = null
+
+/**
+ * 设置主窗口引用
+ */
+export function setMainWindow(win) {
+  mainWindow = win
+  console.log('[ETL] Main window reference set')
+}
 
 /**
  * 获取或创建 ETL 引擎实例
  */
 function getEnricher(config) {
-  const win = BrowserWindow.getAllWindows()[0]
-  
   // 事件回调：通知前端进度
   const eventCallback = (event) => {
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('etl:event', event)
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      console.log('[ETL] Sending event to renderer:', event.type)
+      mainWindow.webContents.send('etl:event', event)
+    } else {
+      console.warn('[ETL] Window not available for event:', event.type)
     }
   }
   

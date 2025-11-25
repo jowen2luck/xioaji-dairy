@@ -9,3 +9,5 @@ out
 
 # Ignore test folder
 src/test/
+.qoder/
+.trae/

@@ -301,6 +301,7 @@ const resetFilters = () => {
 
 const startETLEnhancement = async () => {
   try {
+    console.log('[DataBoardTab] Starting ETL enhancement...')
     if (!window.electron || !window.electron.ipcRenderer) {
       showMessage('Electron API 不可用', 'error')
       return

@@ -12,7 +12,7 @@
       <n-button 
         type="primary" 
         size="large" 
-        @click="$emit('etl-enhance')"
+        @click="() => { console.log('[FilterBar] ETL-enhance button clicked!'); $emit('etl-enhance') }"
         :loading="etlProcessing"
         :disabled="etlProcessing"
       >
@@ -107,7 +107,7 @@ function emitUpdate() {
   width: 100%;
 }
 .filter-item {
-  flex: 1 1 220px;
-  min-width: 220px;
+  flex: 1 1 100px;
+  width: 220px;
 }
 </style>

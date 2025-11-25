@@ -17,6 +17,8 @@
               @update:value="onFilterUpdate"
               @import="importData"
               @reset="resetFilters"
+              @etl-enhance="startETLEnhancement"
+              :etl-processing="etlProcessing"
             />
           </n-card>
         </div>
@@ -73,7 +75,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import AnalysisPage from './AnalysisPage.vue'
 import AgentPage from './AgentPage.vue'
 import AgentWorkbench from './AgentWorkbench.vue'
@@ -81,6 +83,7 @@ import FilterBar from './FilterBar.vue'
 import ThemeSwitcher from './ThemeSwitcher.vue'
 import { FolderOpenOutline, SearchOutline } from '@vicons/ionicons5'
 import { useThemeVars } from 'naive-ui'
+import { loadConfig } from '../config/assistant.ts'
 
 const themeVars = useThemeVars()
 
@@ -96,6 +99,7 @@ const message = ref(null)
 const loading = ref(false)
 const currentPage = ref(1)
 const pageSize = ref(12)
+const etlProcessing = ref(false)
 
 // 计算属性
 const projects = computed(() => {
@@ -240,6 +244,94 @@ const resetFilters = () => {
   endDate.value = ''
 }
 
+const startETLEnhancement = async () => {
+  try {
+    console.log('[Dashboard] Starting ETL enhancement...')
+    if (!window.electron || !window.electron.ipcRenderer) {
+      showMessage('Electron API 不可用', 'error')
+      return
+    }
+    
+    const config = loadConfig()
+    const etlConfig = {
+      ...config.etl,
+      systemPrompt: config.prompts.etlSystem
+    }
+    
+    if (!etlConfig.enabled) {
+      showMessage('ETL 增强功能未启用', 'warning')
+      return
+    }
+    
+    etlProcessing.value = true
+    showMessage('开始智能增强，使用实际数据，请稍候...', 'info')
+    
+    const result = await window.electron.ipcRenderer.invoke('etl:start', etlConfig)
+    
+    if (result.success) {
+      showMessage(result.message, 'success')
+    } else {
+      showMessage(`ETL 启动失败: ${result.error}`, 'error')
+      etlProcessing.value = false
+    }
+    
+  } catch (error) {
+    console.error('ETL 启动失败:', error)
+    showMessage(`ETL 启动失败: ${error.message}`, 'error')
+    etlProcessing.value = false
+  }
+}
+
+const handleETLEvent = (data) => {
+  if (!data || !data.type) {
+    console.warn('[Dashboard] Invalid ETL event:', data)
+    return
+  }
+  
+  console.log('[Dashboard] ETL Event:', data.type, data.data)
+  
+  switch (data.type) {
+    case 'complete':
+      console.log('[Dashboard] ETL Complete, starting data refresh...')
+      refreshData().then(() => {
+        console.log('[Dashboard] Data refreshed, ending loading state...')
+        etlProcessing.value = false
+        showMessage(
+          `智能增强完成！总计 ${data.data.stats.total} 条，处理 ${data.data.stats.processed} 条，缓存 ${data.data.stats.cached} 条，失败 ${data.data.stats.failed} 条`, 
+          data.data.stats.failed > 0 ? 'warning' : 'success'
+        )
+      }).catch(err => {
+        console.error('[Dashboard] Error refreshing data:', err)
+        etlProcessing.value = false
+        showMessage('数据刷新失败', 'error')
+      })
+      break
+      
+    case 'error':
+      console.error('[Dashboard] ETL Error:', data.data)
+      etlProcessing.value = false
+      showMessage(`智能增强出错: ${data.data.error || '未知错误'}`, 'error')
+      break
+  }
+}
+
+const refreshData = async () => {
+  try {
+    console.log('[Dashboard] Invoking load-data...')
+    const data = await window.electron.ipcRenderer.invoke('load-data')
+    console.log('[Dashboard] Received data:', data ? data.length : 0, 'records')
+    if (data && !data.error) {
+      allData.value = data
+      console.log('[Dashboard] Data updated successfully')
+    } else {
+      console.warn('[Dashboard] Invalid data received:', data)
+    }
+  } catch (error) {
+    console.error('[Dashboard] 刷新数据失败:', error)
+    throw error
+  }
+}
+
 // 生命周期
 onMounted(async () => {
   try {
@@ -261,10 +353,21 @@ onMounted(async () => {
       // showMessage('Electron API 不可用 - 正在浏览器环境中运行', 'warning')
     }
     loading.value = false
+    
+    // 注册 ETL 事件监听
+    if (window.electron && window.electron.ipcRenderer) {
+      window.electron.ipcRenderer.on('etl:event', handleETLEvent)
+    }
   } catch (error) {
     showMessage(`加载数据时出错: ${error.message}`, 'error')
     console.error('加载数据时出错:', error)
     loading.value = false
+  }
+})
+
+onUnmounted(() => {
+  if (window.electron && window.electron.ipcRenderer) {
+    window.electron.ipcRenderer.removeListener('etl:event', handleETLEvent)
   }
 })
 </script>

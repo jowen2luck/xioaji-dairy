@@ -11,7 +11,7 @@ import { registerIPCHandlers } from './agent/ipcHandlers.js'
 import { loadAndEnrichData, saveData as saveDataETL } from './data/index.js'
 
 // LLM ETL 增强引擎
-import { registerETLHandlers } from './etl/index.js'
+import { registerETLHandlers, setMainWindow } from './etl/index.js'
 
 
 
@@ -66,6 +66,9 @@ async function createWindow() {
       webviewTag: true,
     },
   })
+
+  // 设置 ETL 窗口引用
+  setMainWindow(win)
 
   // Enable webview tag
   win.webContents.on('will-attach-webview', (event, webPreferences, params) => {
