@@ -11,6 +11,7 @@ const themes = {
       '--color-background-mute': '#282828',
       '--color-text': 'rgba(255, 255, 245, 0.86)',
       '--color-text-secondary': 'rgba(235, 235, 245, 0.6)',
+      '--color-text-light': 'rgba(203, 213, 225, 0.6)',
       '--color-border': '#32363f',
       '--color-card-bg': '#222222',
       '--color-button-primary': '#1890ff',
@@ -31,6 +32,7 @@ const themes = {
       '--color-background-mute': '#f2f2f2',
       '--color-text': '#212529',
       '--color-text-secondary': '#495057',
+      '--color-text-light': 'rgba(0, 0, 0, 0.45)',
       '--color-border': '#dee2e6',
       '--color-card-bg': '#ffffff',
       '--color-button-primary': '#0d6efd',
@@ -46,7 +48,7 @@ const themes = {
 }
 
 // 当前主题
-const currentTheme = ref(themes.custom)
+const currentTheme = ref(themes.light)
 
 // 应用主题到文档根元素
 function applyTheme(theme) {
@@ -65,14 +67,12 @@ function applyTheme(theme) {
     root.style.setProperty(name, value)
   })
   
+  // 在 body 上设置 data-theme 属性，方便 CSS 选择器使用
+  document.body.setAttribute('data-theme', theme.name)
+  
   // 更新body背景
-  if (theme.name === 'custom') {
-    document.body.style.background = 'var(--color-background)'
-    document.body.style.backgroundSize = 'cover'
-  } else {
-    document.body.style.background = 'var(--color-background)'
-    document.body.style.backgroundSize = 'auto'
-  }
+  document.body.style.background = 'var(--color-background)'
+  document.body.style.backgroundSize = 'auto'
 }
 
 // 切换主题

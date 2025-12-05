@@ -35,16 +35,19 @@
           <n-empty v-if="filteredData.length === 0" description="没有找到匹配的记录" />
           <n-grid v-else cols="1 s:1 m:2 l:3 xl:4 2xl:4" responsive="screen" :x-gap="12" :y-gap="12">
             <n-grid-item v-for="(item, index) in paginatedData" :key="index">
-              <n-card hoverable style="width:100%">
-                <n-space vertical>
-                  <n-space justify="space-between">
-                    <n-tag type="info">{{ item.shanggexiangmu || '未分类' }}</n-tag>
-                    <n-time :time="new Date(item.time)" v-if="item.time" />
-                  </n-space>
-                  <n-text depth="secondary">持续时间: {{ item.chixushijian }}</n-text>
-                  <n-p v-html="formatThoughts(item.ganshou)"></n-p>
-                </n-space>
-              </n-card>
+              <!-- 根据是否有 AI 元数据选择显示增强或简化卡片 -->
+              <EnhancedRecordCard 
+                v-if="item._ai_meta"
+                :record="item"
+                :compact="false"
+                @tag-click="handleTagClick"
+                @request-analysis="handleAnalysisRequest"
+              />
+              <SimpleRecordCard 
+                v-else
+                :record="item"
+                :compact="false"
+              />
             </n-grid-item>
           </n-grid>
         </n-spin>
@@ -81,6 +84,8 @@ import AgentPage from './AgentPage.vue'
 import AgentWorkbench from './AgentWorkbench.vue'
 import FilterBar from './FilterBar.vue'
 import ThemeSwitcher from './ThemeSwitcher.vue'
+import EnhancedRecordCard from './EnhancedRecordCard.vue'
+import SimpleRecordCard from './SimpleRecordCard.vue'
 import { FolderOpenOutline, SearchOutline } from '@vicons/ionicons5'
 import { useThemeVars } from 'naive-ui'
 import { loadConfig } from '../config/assistant.ts'
@@ -330,6 +335,18 @@ const refreshData = async () => {
     console.error('[Dashboard] 刷新数据失败:', error)
     throw error
   }
+}
+
+const handleTagClick = (tagType, tagValue) => {
+  console.log('[Dashboard] Tag clicked:', tagType, tagValue)
+  if (tagType === 'mood') {
+    searchQuery.value = tagValue
+  }
+}
+
+const handleAnalysisRequest = (record) => {
+  console.log('[Dashboard] Analysis request for record:', record._id)
+  // 可以实现上次整理逐条记录的配置
 }
 
 // 生命周期

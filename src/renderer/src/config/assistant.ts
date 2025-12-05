@@ -58,9 +58,8 @@ export const DEFAULT_CONFIG: AssistantConfig = {
 
         'qwen-plus-2025-09-11',
 
-        'qvq-max-2025-05-15',
-
         'qwen3-max-2025-09-23',
+        'qwen3-max',
 
         'qwen3-next-80b-a3b-instruct',
 
@@ -71,6 +70,10 @@ export const DEFAULT_CONFIG: AssistantConfig = {
       ]
 
     },
+    {
+      url:"https://uni-api.cstcloud.cn/v1",
+      models: ['deepseek-v3:671b']
+    }
 
     // {
 
@@ -98,9 +101,10 @@ export const DEFAULT_CONFIG: AssistantConfig = {
     enabled: true,
     baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     // baseURL:'https://uni-api.cstcloud.cn/v1',
-    model: 'qwen-plus-2025-09-11',
-    // model: 'deepseek-v3:671b',
-    temperature: 0.1,
+    // model: 'qwen3-max-2025-09-23',
+    // model: 'qwen-plus-2025-09-11',
+    model: 'qwen3-next-80b-a3b-instruct',
+    temperature: 0.3,
     batchSize: 5,
     cacheFile: 'ai_meta_index.json',
     promptVersion: '2.0.0'  // 四维度结构版本

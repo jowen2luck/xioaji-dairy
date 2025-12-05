@@ -66,146 +66,303 @@ export const EMOTION_VOCABULARY = {
     ]
 }
 
+// --- 在 EMOTION_VOCABULARY 下方添加 ---
+
+/**
+ * 认知与心理维度参考词库
+ */
+export const COGNITION_VOCABULARY = {
+    // 马斯洛需求层级
+    maslow_needs: [
+        '生理需求', '安全感', '爱与归属', '尊重与认可', '认知需求', '审美需求', '自我实现', '超自我实现'
+    ],
+    // 常见的认知扭曲 (CBT概念)
+    distortions: [
+        '非黑即白', '灾难化思维', '过度概括', '贴标签', '应该思维', '情绪化推理', '心理过滤', '读心术', '无', '理性客观'
+    ],
+    // 掌控感/代理感
+    agency: [
+        '主动创造', '积极应对', '顺势而为', '被动执行', '无力掌控', '彻底放弃'
+    ],
+    // 时空取向
+    time_orientation: [
+        '沉浸当下', '反刍过去', '担忧未来', '规划未来', '怀念过去', '超越时空'
+    ]
+}
+
 /**
  * AI 提取元数据 Schema（四维度结构）
  */
+/**
+ * 数字生命五层模型 Schema
+ */
 export const ETL_SCHEMA = {
-  type: 'object',
-  description: '从日记中提取的深度元数据，包含元分析、场景行为、情绪归因、智慧资产四个维度。',
-  properties: {
-    // ==================== 维度一：元数据分析 (Meta Analysis) ====================
-    content_type: {
-      type: 'string',
-      enum: ['DailyLog', 'Reflection', 'Letter', 'Idea'],
-      description: '内容体裁：DailyLog(日常记录), Reflection(深度感悟), Letter(书信/对话), Idea(灵感/备忘)'
-    },
-    summary: {
-      type: 'string',
-      description: '精炼摘要（15-50字）。格式建议：Who(谁) + Do(核心事件) + Feeling(体验/结果)。'
-    },
+    type: 'object',
+    description: '基于五层模型的人类行为与心理深度分析数据。',
+    properties: {
+        // ==================== Layer 1: 物理世界 (Physical Reality) ====================
+        // Time 由外部元数据提供，此处不提取
+        location: {
+            type: 'string',
+            description: '物理场景。如：家中书房、公司工位、通勤地铁、健身房、大自然。若不明写则根据语境推断。'
+        },
+        items: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '涉及实体。规则：提取具体的书名、影名、食物、软件、器具。严禁统称。'
+        },
+        people_involved: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '社交图谱。提取所有在场或被深度提及的人物称谓。'
+        },
+        interaction_type: {
+            type: 'string',
+            enum: ['Solo', 'OneOnOne', 'Group', 'Crowd'],
+            description: '交互类型。Solo=独处, OneOnOne=1对1交流, Group=小组(3-10人), Crowd=人群(10+)。'
+        },
+        interaction_detail: {
+            type: 'string',
+            description: '交互的具体的性质，如：深度对谈、争吵、单向输出、协同工作。'
+        },
 
-    // ==================== 维度二：场景与行为 (Activity Context) ====================
-    main_action: {
-      type: 'string',
-      description: '核心动作。如：写代码、散步、拒绝任务、刷剧。'
-    },
-    people_involved: {
-      type: 'array',
-      items: { type: 'string' },
-      description: '涉及人物列表。规则：1. 除非明确写了"独自"，否则必须提取所有出现的人物称谓（如导师、同门、朋友）；2. 即使没有对话，只要人在场也算。'
-    },
-    interaction: {
-      type: 'string',
-      description: '交互性质。描述人与人之间的动态，如：拒绝导师派活、分享瑞士卷、争吵、闲聊。若无交互填 null。'
-    },
-    items: {
-      type: 'array',
-      items: { type: 'string' },
-      description: '具体实体名称。规则：**严禁使用统称**。错误示例：["书", "饭", "剧"]；正确示例：["《跨越边界的社区》", "必胜客披萨", "《唐诡》", "Electron框架"]。'
-    },
+        // ==================== Layer 2: 行为与分类 (Action & Taxonomy) ====================
+        main_action: {
+            type: 'string',
+            description: '核心行为。简述主要在做什么。'
+        },
+        content_type: {
+            type: 'string',
+            enum: ['DailyLog', 'Reflection', 'Letter', 'Idea', 'Dream'],
+            description: '内容体裁。新增 Dream(梦境记录)。'
+        },
+        primary_domain: {
+            type: 'string',
+            enum: ['Career', 'Academic', 'Relationship', 'Health', 'Entertainment', 'PersonalGrowth', 'LifeLog'],
+            description: '生活重心归类：Career(工作), Academic(学术), Relationship(社交/情感), Health(身心健康), Entertainment(娱乐), PersonalGrowth(成长/阅读), LifeLog(琐事)。'
+        },
+        interaction: {
+            type: 'string',
+            description: '交互性质。如：深度对谈、争吵、单向输出、协同工作、无交互。'
+        },
 
-    // ==================== 维度三：情绪与归因 (Emotional Profile) ====================
-    mood_tags: {
-      type: 'array',
-      items: { type: 'string' },
-      description: '精准情绪标签。规则：1. 必须优先使用高颗粒度词汇（如：确幸、憋屈、心流、坚定）；2. 避免仅使用"开心/难过"等笼统词；3. 结合动作推断情绪（如拒绝不合理要求->坚定/硬气）。'
-    },
-    energy_level: {
-      type: 'number',
-      minimum: 1,
-      maximum: 10,
-      description: '能量值(1-10)。1=瘫倒/极度疲惫，5=平淡/日常，8=心流/兴奋，10=狂喜/极度亢奋。'
-    },
-    root_cause: {
-      type: 'string',
-      description: '情绪产生的核心归因。简述是什么触发了上述情绪（如：维护了个人边界、吃到了美食、天气寒冷）。'
-    },
 
-    // ==================== 维度四：智慧资产 (Intellectual Assets) ====================
-    key_quotes: {
-      type: 'array',
-      items: { type: 'string' },
-      description: '智慧资产提取。规则：原文摘录日记中的感悟、哲理、反思或金句。**必须保持原文，不得改写**。'
-    }
-  },
-  // 强制要求以下字段，防止 LLM 偷懒返回 null
-  required: ['content_type', 'summary', 'mood_tags', 'people_involved', 'items']
+        physiological_sensations: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '具体的生理感受/信号。如：头痛、饥饿、肌肉酸痛、呼吸急促、轻盈、有力。若无明显感受则留空。'
+        },
+        physiological_valence: {
+            type: 'string',
+            enum: ['Positive', 'Negative', 'Neutral', 'Mixed'],
+            description: '生理状态的整体评价。Positive=舒适/强健, Negative=疼痛/不适, Neutral=无感/正常, Mixed=痛并快乐着(如运动后)。'
+        },
+        // ==================== Layer 3: 能量与心流 (Energy & Flow) ====================
+        mood_tags: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '情绪标签。请使用高颗粒度词汇。'
+        },
+        energy_level: {
+            type: 'number',
+            minimum: 1,
+            maximum: 10,
+            description: '生理/心理综合电量 (1-10)。'
+        },
+        focus_level: {
+            type: 'number',
+            minimum: 1,
+            maximum: 10,
+            description: '专注度/心流深度 (1-10)。1=涣散/分心，10=物我两忘/深度心流。'
+        },
+        root_cause: {
+            type: 'string',
+            description: '情绪与状态的直接归因。'
+        },
+
+        // ==================== Layer 4: 认知与心理 (Cognition & Psychology) ====================
+        agency_level: {
+            type: 'number',
+            minimum: -5,
+            maximum: 5,
+            description: '掌控感评分 (-5到5)。-5=完全被迫/无力，0=中性/顺其自然，5=极度主动/主宰局面。'
+        },
+        time_orientation: {
+            type: 'string',
+            enum: ['Past', 'Present', 'Future', 'Timeless'],
+            description: '时空取向。Past(纠结/怀念过去), Present(关注当下), Future(焦虑/规划未来)。'
+        },
+        maslow_need: {
+            type: 'string',
+            description: '核心需求层级。推断该日记背后满足或受挫的需求（如：安全感、爱与归属、自我实现）。'
+        },
+        thinking_patterns: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '思维模式识别。若发现“非理性信念”（如灾难化、非黑即白）请指出；若理性客观则填["Rational"]。'
+        },
+
+        // ==================== Layer 5: 资产与沉淀 (Assets & Output) ====================
+        summary: {
+            type: 'string',
+            description: '一句话摘要 (Who + Do + Context)。'
+        },
+        key_quotes: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '智慧资产/金句摘录。'
+        },
+        next_steps: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '待办事项/Open Loops。提取文中明确提到的下一步计划或未完成事项。'
+        },
+        content_depth: {
+            type: 'string',
+            enum: ['shallow', 'normal', 'deep'],
+            description: '判断这条日记的信息密度。shallow=流水账/极短; normal=有基本描述; deep=有深度思考或详细记录。'
+        }
+    },
+    required: ['summary', 'content_type', 'primary_domain', 'mood_tags', 'agency_level', 'focus_level']
 }
 
 // ==================== Prompt 模板（四维度结构） ====================
 
 /**
- * 构建 ETL Prompt（完整文本传输，无截断）
+ * 辅助函数：将词库对象扁平化为 Prompt 字符串
+ */
+function serializeVocabulary(vocabObj) {
+    return Object.entries(vocabObj)
+        .map(([category, words]) => `- ${category}: ${words.join(', ')}`)
+        .join('\n');
+}
+
+/**
+ * 构建 5层模型 ETL Prompt (包含防御性提取与少样本学习)
  */
 export function buildETLPrompt(record) {
-    const emotionVocab = Object.values(EMOTION_VOCABULARY).flat().join('、')
     const cleanContent = (record.ganshou || '')
         .replace(/<[^>]+>/g, '\n')
         .replace(/\n+/g, '\n')
         .trim();
+
     const fullText = `
 【时间】：${record.time || '未知'}
-【项目】：${record.shanggexiangmu || '未分类'}
+【原分类】：${record.shanggexiangmu || '未分类'}
 【时长】：${record.chixushijian || '未知'}
-【日记正文】：
+【正文】：
 ${cleanContent}
 `.trim();
 
+    const emotionContext = serializeVocabulary(EMOTION_VOCABULARY);
+    const cognitionContext = serializeVocabulary(COGNITION_VOCABULARY);
+
     return `
 # Role
-你是一位拥有敏锐洞察力的**个人叙事分析师**。你的任务是从用户的日记中挖掘深层信息，构建高保真的元数据。
-请不要只做字面提取，要像侦探一样分析**潜台词、社交动态和情绪暗流**。
+你是一位精通认知心理学的数据科学家。你的任务是将用户的日记转化为结构化的"数字生命"数据，基于[五层模型]进行深度提取。
 
 # Input Data
 ${fullText}
 
-# Extraction Guidelines (思维链)
-在提取之前，请先进行以下逻辑推理（无需输出推理过程，但必须执行）：
-1.  **寻找隐性人物**：文中是否提到了"导师"、"同门"、"室友"、"对象"？即使没有对话，只要人在场，就算"people_involved"。
-2.  **寻找具体名词**：
-    *   不要输出"吃的"，要提取"必胜客"、"瑞士卷"。
-    *   不要输出"看书"，要提取"《百年孤独》"。
-    *   不要输出"看剧"，要提取"《唐朝诡事录》"。
-3.  **分析交互动态**：如果有"导师过来派活"且"我拒绝了"，这是高价值的"Interaction"，必须记录。
-4.  **挖掘金句**：凡是关于人生、职场、哲理的完整句子，必须原文摘录到 "key_quotes"。
+# Reference Vocabulary
+## 情绪词库 (Mood)
+${emotionContext}
+## 认知词库 (Cognition)
+${cognitionContext}
 
-# Schema Definitions
-请严格填充以下 JSON 字段：
+# Extraction Guidelines (⚠️ 重要原则)
+1.  **判断信息密度**：首先判断这段文字是“流水账”(shallow) 还是“深度记录”(deep)。
+2.  **防御性提取**：
+    *   对于 **agency_level, thinking_patterns, maslow_need** 等深层字段，**必须要有明确的文本证据**才能提取。
+    *   如果 content_depth 为 'shallow'，或者没有相关心理描述，**必须返回 null**，不要强行分析无关紧要的琐事。
+3.  **情绪推断**：即使是短文本，也可以通过动作推断情绪（如“吃了顿好的” -> 满足/确幸）。
 
-1.  **summary**: (String) 包含"Who(谁)+Do(做了什么)+Feeling(什么感觉)"的摘要。不要写流水账，要概括核心事件。
-2.  **content_type**: (String) DailyLog(日常) | Reflection(感悟) | Letter(信件) | Idea(灵感)
-3.  **main_action**: (String) 核心动作。
-4.  **people_involved**: (Array<String>) **关键**。提取所有出现的人物称谓。若确实只有自己，填空数组。
-5.  **interaction**: (String|null) 描述人与人的互动（如：拒绝导师任务、分享零食）。
-6.  **items**: (Array<String>) **关键**。提取所有专有名词（书名/影名/食物/软件/地名）。
-7.  **mood_tags**: (Array<String>) 精准情绪标签（数组，从标准词库选取）,从动作和语境推断情绪（如：拒绝任务->坚定/释然；吃甜点->满足/确幸）。
-【标准情绪词库】
-${emotionVocab}
-8.  **energy_level**: (Number 1-10) 1=瘫倒，5=日常，10=极度兴奋。
-9.  **root_cause**: (String) 导致情绪的直接原因。
-10. **key_quotes**: (Array<String>) 原文摘录的有价值的思考。
+# Analysis Steps (思维链)
+1.  **Depth Check**: 先定性 content_depth (shallow/normal/deep)。
+2.  **Layer 1 & 2**: 提取物理场景、行为和生理感受。
+3.  **Layer 3**: 判断情绪与能量。
+4.  **Layer 4 (Conditional)**: 
+    *   如果是 shallow，跳过认知分析（填 null）。
+    *   如果是 normal/deep，分析掌控感、时空观和认知扭曲。
+5.  **Layer 5**: 总结与待办。
 
-# Output Format
-仅返回纯 JSON 字符串。无 Markdown。
+# Few-Shot Examples (参考范例)
 
-# Example (Reference)
-Input: "导师要把杂活给我，我直接拒绝了。回来吃了块蛋糕，真爽。"
+## Example 1: Shallow (流水账)
+Input: "今天中午吃了牛肉面，味道不错，吃完就去午睡了。"
 Output:
 {
   "content_type": "DailyLog",
-  "summary": "拒绝了导师的不合理任务，并通过美食自我奖励",
-  "main_action": "沟通/饮食",
-  "people_involved": ["导师"],
-  "interaction": "拒绝导师派发的杂活",
-  "items": ["蛋糕"],
-  "mood_tags": ["满足", "坚定"],
-  "energy_level": 8,
-  "root_cause": "成功维护边界且吃到美食",
-  "key_quotes": []
+  "content_depth": "shallow",  // <--- 标记为浅层
+  "primary_domain": "LifeLog",
+  "main_action": "吃午饭后休息",
+  "summary": "中午享用了美味的牛肉面并进行了午休",
+  "mood_tags": ["满足", "放松"],
+  "energy_level": 6,
+  "focus_level": 5,
+  "physiological_sensations": ["饱腹"],
+  "physiological_valence": "Positive",
+  "agency_level": null,          // <--- 放弃强行分析
+  "thinking_patterns": null,     // <--- 放弃强行分析
+  "maslow_need": "生理需求",      // <--- 明显可推断
+  "next_steps": []
+}
+
+## Example 2: Deep (深度反思)
+Input: "被导师骂了一顿，觉得自己这辈子都毕不了业了。但是仔细想想，他指出的问题确实存在，我应该主动去改。"
+Output:
+{
+  "content_type": "Reflection",
+  "content_depth": "deep",       // <--- 标记为深层
+  "primary_domain": "Academic",
+  "main_action": "反思学业挫折",
+  "summary": "被导师批评后陷入自我怀疑，最终转为理性应对",
+  "mood_tags": ["挫败", "理性", "坚定"],
+  "energy_level": 4,
+  "focus_level": 8,
+  "physiological_sensations": ["胸闷"],
+  "physiological_valence": "Negative",
+  "agency_level": 3,             // <--- 有明显的从被动转主动的过程
+  "thinking_patterns": ["灾难化思维", "Rational"], // <--- "毕不了业"是灾难化，"应该去改"是理性
+  "maslow_need": "自我实现",
+  "root_cause": "学业受挫但试图重获掌控",
+  "next_steps": ["修改论文问题"]
+}
+
+# Output Schema (Strict JSON)
+请严格填充以下 JSON，不要输出 Markdown 标记，仅返回 JSON 字符串。对于无证据的 Layer 4 字段，请填 null。
+
+{
+  "location": "String",
+  "items": ["String"],
+  "people_involved": ["String"],
+  "interaction_type": "Solo | OneOnOne | Group | Crowd",
+  "interaction_detail": "String",
+
+  "main_action": "String",
+  "content_type": "DailyLog | Reflection | Letter | Idea | Dream",
+  "primary_domain": "Career | Academic | Relationship | Health | Entertainment | PersonalGrowth | LifeLog",
+  
+  "physiological_sensations": ["String"],
+  "physiological_valence": "Positive | Negative | Neutral | Mixed",
+
+  "mood_tags": ["String (参考情绪词库)"],
+  "energy_level": Number (1-10),
+  "focus_level": Number (1-10),
+  "root_cause": "String",
+
+  "agency_level": Number (Or null if shallow),
+  "time_orientation": "Past | Present | Future | Timeless | null",
+  "maslow_need": "String (Or null)",
+  "thinking_patterns": ["String"] (Or null),
+
+  "summary": "String",
+  "key_quotes": ["String"],
+  "next_steps": ["String"],
+  "content_depth": "shallow | normal | deep"
 }
 `;
 }
-
 // ==================== ETL 引擎核心类 ====================
 
 export class LLMEnricher {
@@ -320,8 +477,9 @@ export class LLMEnricher {
 
     async detectDirty(records, forceRefresh = false) {
         const dirty = []
+        let skipped = 0
         const versionMismatch = this.cache.version !== this.config.promptVersion
-        
+
         if (versionMismatch) {
             console.log(`[LLMEnricher] Cache version mismatch (${this.cache.version} -> ${this.config.promptVersion}), updating version...`)
             this.cache.version = this.config.promptVersion
@@ -329,6 +487,13 @@ export class LLMEnricher {
         }
 
         for (const record of records) {
+            // 跳过感受字段为空的记录
+            if (!record.ganshou || record.ganshou.trim() === '') {
+                console.log(`[LLMEnricher] Skipping record with empty ganshou field: ${record.time} - ${record.shanggexiangmu}`)
+                skipped++
+                continue
+            }
+
             const hash = this.computeRecordHash(record)
 
             if (forceRefresh) {
@@ -343,7 +508,7 @@ export class LLMEnricher {
             }
         }
 
-        console.log(`[LLMEnricher] Detected ${dirty.length} dirty records, ${this.stats.cached} cached${forceRefresh ? ' (FORCE REFRESH MODE)' : ''}${versionMismatch ? ' (version updated)' : ''}`)
+        console.log(`[LLMEnricher] Detected ${dirty.length} dirty records, ${this.stats.cached} cached, ${skipped} skipped (empty ganshou)${forceRefresh ? ' (FORCE REFRESH MODE)' : ''}${versionMismatch ? ' (version updated)' : ''}`)
 
         return dirty
     }
@@ -547,7 +712,7 @@ export class LLMEnricher {
                 await this.saveCache()
                 this.needSaveCache = false
             }
-            
+
             this.eventCallback({
                 type: 'complete',
                 data: {

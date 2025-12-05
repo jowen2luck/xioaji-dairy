@@ -20,7 +20,10 @@ onMounted(() => {
 })
 
 function onToggle(val) {
-  setTheme(val ? 'dark' : 'light')
+  const newTheme = val ? 'dark' : 'light'
+  setTheme(newTheme)
+  // 輸出事件以便父件监听
+  window.dispatchEvent(new CustomEvent('app-theme-changed', { detail: { theme: newTheme } }))
 }
 </script>
 
