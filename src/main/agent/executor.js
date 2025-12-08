@@ -99,21 +99,24 @@ export class AgentExecutor {
         // 3.2 检查是否有工具调用
         const toolCalls = this.extractToolCalls(response)
 
+        // 提取 LLM 在这一轮的思考内容
+        const reasoning = this.extractContent(response)
+        
         if (!toolCalls || toolCalls.length === 0) {
           // 没有工具调用 = LLM 认为已经有足够信息给出最终答案
           console.log(`[AgentExecutor] Iteration ${iteration}: No tool calls, task complete`)
-          const content = this.extractContent(response)
 
-          // 记录本轮步骤
+          // 记录本轮步骤（最终答案）
           this.state.steps.push({
             iteration,
             action: 'final_answer',
-            reasoning: content
+            reasoning: reasoning,
+            timestamp: new Date().toISOString()
           })
 
           return {
             success: true,
-            content,
+            content: reasoning,
             raw: response,
             state: this.state,
             duration: Date.now() - startTime
@@ -122,14 +125,20 @@ export class AgentExecutor {
 
         // 3.3 执行工具调用
         console.log(`[AgentExecutor] Iteration ${iteration}: Executing ${toolCalls.length} tool(s)`)
+        console.log(`[AgentExecutor] LLM reasoning before tool call:`, reasoning || '(无显式推理)')
         const toolResults = await this.handleToolCalls(toolCalls)
 
-        // 记录本轮步骤
+        // 记录本轮步骤（包含思考内容、工具调用和结果）
         this.state.steps.push({
           iteration,
           action: 'tool_calls',
-          tools: toolCalls.map(tc => tc.name),
-          results: toolResults
+          reasoning: reasoning || `需要使用工具 ${toolCalls.map(tc => tc.name).join('、')} 来获取信息`,
+          tools: toolCalls.map(tc => ({
+            name: tc.name,
+            args: typeof tc.args === 'string' ? JSON.parse(tc.args || '{}') : tc.args
+          })),
+          results: toolResults,
+          timestamp: new Date().toISOString()
         })
 
         // 3.4 将工具调用和结果添加到消息历史

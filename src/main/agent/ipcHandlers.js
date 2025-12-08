@@ -186,6 +186,46 @@ export function registerIPCHandlers(config = {}) {
   })
 
   /**
+   * handler: tool-execute
+   * 通用工具执行接口（用于数据分析页等场景）
+   * 参数格式: { toolName: string, params: object }
+   */
+  ipcMain.handle('tool-execute', async (event, toolName, params = {}) => {
+    try {
+      console.log('[IPC:tool-execute] Tool:', toolName, 'Params:', JSON.stringify(params))
+
+      const toolRegistry = getToolRegistry()
+      const tool = toolRegistry.get(toolName)
+      
+      if (!tool) {
+        return {
+          isError: true,
+          data: { error: `Tool '${toolName}' not found in registry` },
+        }
+      }
+
+      // 调用工具
+      const result = await tool.invoke(params)
+
+      // 统一返回格式
+      return {
+        isError: result.isError || false,
+        data: result.toJSON ? result.toJSON() : result,
+        toolName: result.toolName || toolName,
+        timestamp: result.timestamp || new Date().toISOString()
+      }
+    } catch (error) {
+      console.error('[IPC:tool-execute] Error:', error)
+      return {
+        isError: true,
+        data: { error: error.message },
+        toolName,
+        timestamp: new Date().toISOString()
+      }
+    }
+  })
+
+  /**
    * handler: assistant:list-models
    * 列出可用的模型和 API 端点
    */
@@ -260,6 +300,7 @@ export function unregisterIPCHandlers() {
   console.log('[IPC] Unregistering handlers')
   ipcMain.removeAllListeners('assistant:chat')
   ipcMain.removeAllListeners('assistant:invoke-tool')
+  ipcMain.removeAllListeners('tool-execute')
   ipcMain.removeAllListeners('assistant:list-models')
   ipcMain.removeAllListeners('assistant:list-tools')
   ipcMain.removeAllListeners('assistant:analyze-intent')

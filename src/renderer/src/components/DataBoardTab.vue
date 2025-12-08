@@ -1,96 +1,136 @@
 <template>
-  <div class="data-board-tab">
-    <div class="controls">
-      <n-card style="width: 100%">
-        <FilterBar
-          :project-options="projectOptions"
-          :value="{ query: searchQuery, project: projectFilter, dateRange }"
-          @update:value="onFilterUpdate"
-          @import="importData"
-          @reset="resetFilters"
-          @etl-enhance="startETLEnhancement"
-          :etl-processing="etlProcessing"
-        />
-        
-        <!-- ETL 进度条区域 -->
-        <div class="etl-progress-section" v-if="etlProcessing || etlStats.processed > 0">
-          <n-divider style="margin: 16px 0" />
-          <n-space vertical size="medium">
-            <n-space align="center" justify="space-between">
-              <n-text depth="3">
-                已处理 {{ etlStats.processed }} / {{ etlStats.total }} 条
-              </n-text>
-              <n-text depth="3" v-if="etlStats.cached > 0">
-                已缓存 {{ etlStats.cached }} 条
-              </n-text>
-              <n-text depth="3" v-if="etlStats.failed > 0" type="error">
-                失败 {{ etlStats.failed }} 条
+  <div class="data-board-tab-wrapper">
+    <!-- 固定顶部控制栏 -->
+    <div class="fixed-header">
+      <div class="controls">
+        <n-card style="width: 100%">
+          <FilterBar
+            :project-options="projectOptions"
+            :value="{ query: searchQuery, project: projectFilter, dateRange }"
+            @update:value="onFilterUpdate"
+            @import="importData"
+            @reset="resetFilters"
+            @etl-enhance="startETLEnhancement"
+            :etl-processing="etlProcessing"
+          />
+          
+          <!-- ETL 进度条区域 -->
+          <div class="etl-progress-section" v-if="etlProcessing || etlStats.processed > 0">
+            <n-divider style="margin: 16px 0" />
+            <n-space vertical size="medium">
+              <n-space align="center" justify="space-between">
+                <n-text depth="3">
+                  已处理 {{ etlStats.processed }} / {{ etlStats.total }} 条
+                </n-text>
+                <n-text depth="3" v-if="etlStats.cached > 0">
+                  已缓存 {{ etlStats.cached }} 条
+                </n-text>
+                <n-text depth="3" v-if="etlStats.failed > 0" type="error">
+                  失败 {{ etlStats.failed }} 条
+                </n-text>
+              </n-space>
+              
+              <n-progress
+                type="line"
+                :percentage="etlProgressPercentage"
+                :status="etlProgressStatus"
+                :show-indicator="false"
+              />
+              <n-text style="text-align: center; display: block;">
+                {{ etlProgressPercentage }}%
               </n-text>
             </n-space>
-            
-            <n-progress
-              type="line"
-              :percentage="etlProgressPercentage"
-              :status="etlProgressStatus"
-              :show-indicator="false"
-            />
-            <n-text style="text-align: center; display: block;">
-              {{ etlProgressPercentage }}%
-            </n-text>
-          </n-space>
-        </div>
-      </n-card>
+          </div>
+        </n-card>
+      </div>
+
+      <n-alert v-if="message" :type="message.type" closable @close="message = null">
+        {{ message.text }}
+      </n-alert>
     </div>
 
-    <n-alert v-if="message" :type="message.type" closable @close="message = null">
-      {{ message.text }}
-    </n-alert>
+    <!-- 主内容区域 -->
+    <div class="content-wrapper">
+      <!-- 2:1 双栏布局主体 -->
+      <div class="dual-column-layout">
+        <!-- 左侧主轴 (70%) - 沉浸式阅读区 -->
+        <div class="main-column">
+          <!-- 记录列表 -->
+          <n-spin :show="loading">
+            <n-empty v-if="filteredData.length === 0" description="没有找到匹配的记录" />
+            <div v-else class="records-list">
+              <div v-for="(item, index) in paginatedData" :key="index" class="record-item">
+                <!-- 动态选择渲染组件：有 AI 数据用增强卡片，否则用普通卡片 -->
+                <EnhancedRecordCard
+                  v-if="item._ai_meta"
+                  :record="item"
+                  @tag-click="handleTagClick"
+                  @request-analysis="handleRequestAnalysis"
+                />
+                <RecordCard
+                  v-else
+                  :record="item"
+                  :show-ai-meta="true"
+                  :hoverable="true"
+                  :clickable="false"
+                  @click="handleRecordClick"
+                  @tag-click="handleTagClick"
+                />
+              </div>
+            </div>
+          </n-spin>
+        </div>
 
-    <!-- AI 增强统计信息卡片 -->
-    <n-space vertical :size="12">
-      <n-card>
-        <n-statistic-group>
-          <n-statistic label="记录总数" :value="filteredData.length" />
-          <n-statistic label="AI 增强" :value="aiEnhancedCount">
-            <template #suffix>/ {{ filteredData.length }}</template>
-          </n-statistic>
-          <n-statistic label="增强率" :value="aiEnhancementRate + '%'" />
-        </n-statistic-group>
-      </n-card>
-    </n-space>
+        <!-- 右侧边栏 (30%) - 灵感与时光侧栏 -->
+        <div class="sidebar-column">
+          <div class="sidebar-sticky">
+            <!-- 那年今日 -->
+            <FlashbackCard :all-data="allData" />
+            
+            <!-- 随机漫步 -->
+            <SerendipityCard :all-data="allData" />
+            
+            <!-- 洞察概览 -->
+            <QuickStatsCard :all-data="allData" />
+          </div>
+        </div>
+      </div>
+    </div>
 
-    <n-spin :show="loading">
-      <n-empty v-if="filteredData.length === 0" description="没有找到匹配的记录" />
-      <n-grid v-else cols="1 s:1 m:2 l:3 xl:4 2xl:4" responsive="screen" :x-gap="12" :y-gap="12">
-        <n-grid-item v-for="(item, index) in paginatedData" :key="index">
-          <!-- 动态选择渲染组件：有 AI 数据用增强卡片，否则用普通卡片 -->
-          <EnhancedRecordCard
-            v-if="item._ai_meta"
-            :record="item"
-            @tag-click="handleTagClick"
-            @request-analysis="handleRequestAnalysis"
+    <!-- 固定底部分页器 -->
+    <div v-if="filteredData.length > 0" class="fixed-footer">
+      <div class="pagination-container">
+        <n-space align="center" justify="space-between" style="width: 100%">
+          <div class="pagination-info">
+            <n-text depth="2">
+              共 {{ filteredData.length }} 条 / 第 {{ currentPage }} 页
+            </n-text>
+          </div>
+          
+          <n-pagination
+            v-model:page="currentPage"
+            :page-count="pageCount"
+            :page-size="pageSize"
+            :item-count="filteredData.length"
+            @update:page="handlePageChange"
+            size="small"
+            :show-size-picker="false"
+            :show-quick-jumper="loadConfig().pagination.enableQuickJump"
           />
-          <RecordCard
-            v-else
-            :record="item"
-            :show-ai-meta="true"
-            :hoverable="true"
-            :clickable="false"
-            @click="handleRecordClick"
-            @tag-click="handleTagClick"
-          />
-        </n-grid-item>
-      </n-grid>
-    </n-spin>
-
-    <div v-if="filteredData.length > 0" class="pagination-container">
-      <n-pagination
-        v-model:page="currentPage"
-        :page-count="pageCount"
-        :page-size="pageSize"
-        :item-count="filteredData.length"
-        @update:page="handlePageChange"
-      />
+          
+          <div class="pagination-size">
+            <n-text depth="2" style="margin-right: 12px">每页</n-text>
+            <n-select
+              v-model:value="pageSize"
+              :options="pageSizeOptions"
+              size="small"
+              style="width: 80px"
+              @update:value="handlePageSizeChange"
+            />
+            <n-text depth="2" style="margin-left: 8px">条</n-text>
+          </div>
+        </n-space>
+      </div>
     </div>
   </div>
 </template>
@@ -100,6 +140,9 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import FilterBar from './FilterBar.vue'
 import RecordCard from './RecordCard.vue'
 import EnhancedRecordCard from './EnhancedRecordCard.vue'
+import FlashbackCard from './FlashbackCard.vue'
+import SerendipityCard from './SerendipityCard.vue'
+import QuickStatsCard from './QuickStatsCard.vue'
 import { loadConfig } from '../config/assistant.ts'
 
 // Props
@@ -123,7 +166,7 @@ const endDate = ref('')
 const message = ref(null)
 const loading = ref(false)
 const currentPage = ref(1)
-const pageSize = ref(12)
+const pageSize = ref(loadConfig().pagination.pageSize)
 
 // ETL 增强状态
 const etlProcessing = ref(false)
@@ -216,6 +259,20 @@ const etlProgressStatus = computed(() => {
 const handlePageChange = (page) => {
   currentPage.value = page
 }
+
+const handlePageSizeChange = (newSize) => {
+  pageSize.value = newSize
+  // 分页数变化后，重置到第一页
+  currentPage.value = 1
+}
+
+const pageSizeOptions = [
+  { label: '6', value: 6 },
+  { label: '10', value: 10 },
+  { label: '15', value: 15 },
+  { label: '20', value: 20 },
+  { label: '30', value: 30 }
+]
 
 const handleRecordClick = (record) => {
   console.log('Record clicked:', record._id)
@@ -479,26 +536,116 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (window.electron && window.electron.ipcRenderer) {
-    window.electron.ipcRenderer.removeListener('etl:event', handleETLEvent)
+    window.electron.ipcRenderer.removeAllListeners('etl:event')
   }
 })
 </script>
 
 <style scoped>
-.data-board-tab {
+.data-board-tab-wrapper {
+  display: flex;
+  flex-direction: column;
   width: 100%;
-  height: 95vh;
-  overflow: scroll;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 固定顶部 */
+.fixed-header {
+  flex-shrink: 0;
+  overflow-y: auto;
+  border-bottom: 1px solid var(--n-border-color);
+  background: var(--n-color);
+  z-index: 100;
 }
 
 .controls {
-  margin-bottom: 24px;
+  padding: 16px;
+  margin-bottom: 0;
+}
+
+/* 主内容区域 */
+.content-wrapper {
+  flex: 1;
+  overflow: hidden;
+  padding: 2px 16px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 双栏布局核心 */
+.dual-column-layout {
+  display: flex;
+  gap: 24px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 左侧主轴 - 沉浸式阅读区 */
+.main-column {
+  flex: 1;
+  min-width: 0;
+  max-width: 70%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+}
+
+.records-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.record-item {
+  width: 100%;
+}
+
+/* 右侧边栏 - 灵感与时光 */
+.sidebar-column {
+  width: 30%;
+  min-width: 280px;
+  max-width: 360px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+}
+
+.sidebar-sticky {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 固定底部 - 精美分页器 */
+.fixed-footer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--n-border-color);
+  background: var(--n-color);
+  padding: 0 16px;
+  z-index: 100;
 }
 
 .pagination-container {
-  margin-top: 24px;
   display: flex;
-  justify-content: center;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 0;
+}
+
+.pagination-info {
+  min-width: 200px;
+}
+
+.pagination-size {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
 }
 
 .etl-progress-section {
@@ -513,6 +660,57 @@ onUnmounted(() => {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/* 响应式布局 */
+@media (max-width: 1200px) {
+  .dual-column-layout {
+    flex-direction: column;
+  }
+  
+  .main-column {
+    max-width: 100%;
+  }
+  
+  .sidebar-column {
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+  }
+  
+  .sidebar-sticky {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  
+  .sidebar-sticky > * {
+    flex: 1;
+    min-width: 280px;
+  }
+}
+
+@media (max-width: 768px) {
+  .content-wrapper {
+    padding: 12px;
+  }
+
+  .fixed-footer {
+    padding: 0px 12px;
+  }
+
+  .pagination-container {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .sidebar-sticky {
+    flex-direction: column;
+  }
+  
+  .sidebar-sticky > * {
+    min-width: 100%;
   }
 }
 </style>

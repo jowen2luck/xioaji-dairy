@@ -93,6 +93,7 @@
 <script setup>
 import { ref, nextTick } from 'vue'
 import { NCard, NInput, NInputGroup, NButton, NSpace } from 'naive-ui'
+import { DEFAULT_CONFIG } from '../config/assistant'
 
 // 状态管理
 const messages = ref([])
@@ -139,21 +140,50 @@ const sendMessage = async () => {
     if (window.electron && window.electron.ipcRenderer) {
       traceSteps.value = []
       traceSteps.value.push({ type: 'think', title: '理解问题', detail: message, time: new Date() })
-      const result = await window.electron.ipcRenderer.invoke('intelligent-query', message)
+      
+      // 使用新的 assistant:chat 接口
+      const result = await window.electron.ipcRenderer.invoke('assistant:chat', {
+        userQuery: message,
+        messages: [
+          {
+            role: 'system',
+            content: DEFAULT_CONFIG.prompts?.chatSystem || '你是一个专业的日记分析助手，可以帮助用户查询、分析和理解他们的日记数据。请用简洁、友好的方式回答问题。'
+          },
+          {
+            role: 'user',
+            content: message
+          }
+        ],
+        model: DEFAULT_CONFIG.selectedModel || 'qwen-plus-2025-09-11',
+        baseURL: DEFAULT_CONFIG.selectedBaseURL || 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        tools: DEFAULT_CONFIG.enabledTools.map(name => ({ name }))
+      })
       
       if (result.success) {
-        traceSteps.value.push({ type: 'tool', title: '查询数据', detail: result.data.type, time: new Date() })
-        // 格式化响应
-        const formattedResponse = formatResponse(result.data)
+        // 显示工具调用轨迹
+        if (result.data.state && result.data.state.steps) {
+          result.data.state.steps.forEach(step => {
+            if (step.action === 'tool_calls' && step.tools) {
+              traceSteps.value.push({ 
+                type: 'tool', 
+                title: '调用工具', 
+                detail: step.tools.join(', '), 
+                time: new Date() 
+              })
+            }
+          })
+        }
+        
+        // 显示 LLM 生成的回复（已经是自然语言）
         messages.value.push({
-          content: formattedResponse,
+          content: result.data.content || '抱歉，我无法生成回复。',
           sender: 'agent',
           time: new Date()
         })
         traceSteps.value.push({ type: 'result', title: '生成回复', detail: '完成', time: new Date() })
       } else {
         messages.value.push({
-          content: `抱歉，处理您的请求时出现了错误：${result.error}`,
+          content: `抱歉，处理您的请求时出现了错误：${result.error?.message || result.error}`,
           sender: 'agent',
           time: new Date()
         })
@@ -180,141 +210,6 @@ const sendMessage = async () => {
 const quickAction = (query) => {
   inputMessage.value = query
   sendMessage()
-}
-
-const formatResponse = (data) => {
-  let response = ''
-  
-  switch (data.type) {
-    case 'search':
-      response = formatSearchResults(data.results)
-      break
-    case 'statistics':
-      response = formatStatistics(data.statistics)
-      break
-    case 'comparison':
-      response = formatComparison(data.comparison)
-      break
-    case 'trend':
-      response = formatTrend(data.trend)
-      break
-    case 'error':
-      response = data.message
-      break
-    default:
-      response = '我理解您的请求，但暂时无法提供相关信息。'
-  }
-  
-  if (data.suggestions && data.suggestions.length > 0) {
-    response += '<br><br><strong>建议：</strong><br>'
-    response += data.suggestions.map(s => `• ${s}`).join('<br>')
-  }
-  
-  return response
-}
-
-const formatSearchResults = (results) => {
-  if (!results || results.length === 0) {
-    return '没有找到符合条件的记录。'
-  }
-  
-  let response = `找到 <strong>${results.length}</strong> 条记录：<br><br>`
-  
-  results.slice(0, 5).forEach(result => {
-    response += `<strong>${result.time ? new Date(result.time).toLocaleDateString('zh-CN') : '未知日期'}</strong> - ${result.shanggexiangmu || '无项目'}<br>`
-    response += `感想：${result.ganshou || '无'}<br>`
-    if (result.chengjiu) {
-      response += `成就：已完成<br>`
-    }
-    response += '<br>'
-  })
-  
-  if (results.length > 5) {
-    response += `... 还有 ${results.length - 5} 条记录。`
-  }
-  
-  return response
-}
-
-const formatStatistics = (statistics) => {
-  let response = '<strong>统计结果：</strong><br><br>'
-  
-  if (statistics.total !== undefined) {
-    response += `总记录数：${statistics.total}<br>`
-  }
-  
-  if (statistics.avgDuration !== undefined) {
-    response += `平均时长：${statistics.avgDuration}<br>`
-  }
-  
-  if (statistics.projects) {
-    response += '<br><strong>项目统计：</strong><br>'
-    Object.entries(statistics.projects).forEach(([project, stats]) => {
-      response += `• ${project}：${stats}条记录<br>`
-    })
-  }
-  
-  if (statistics.emotions) {
-    response += '<br><strong>情绪统计：</strong><br>'
-    Object.entries(statistics.emotions).forEach(([emotion, count]) => {
-      response += `• ${emotion}：${count}次<br>`
-    })
-  }
-  
-  if (statistics.achievements) {
-    response += `<br><strong>成就统计：</strong><br>• 完成成就：${statistics.achievements}项<br>`
-  }
-  
-  return response
-}
-
-const formatComparison = (comparison) => {
-  let response = '<strong>对比分析：</strong><br><br>'
-  
-  if (comparison && typeof comparison === 'object') {
-    Object.entries(comparison).forEach(([project, data]) => {
-      response += `• ${project}：${data.count}条记录`
-      if (data.avgDuration) {
-        response += `，平均时长${Math.round(data.avgDuration)}分钟`
-      }
-      if (data.achievements !== undefined) {
-        response += `，成就${data.achievements}项`
-      }
-      response += '<br>'
-    })
-  } else {
-    response += '暂无比较数据。'
-  }
-  
-  return response
-}
-
-const formatTrend = (trend) => {
-  let response = '<strong>趋势分析：</strong><br><br>'
-  
-  if (trend && typeof trend === 'object') {
-    if (Object.keys(trend).length > 0) {
-      Object.entries(trend).forEach(([key, data]) => {
-        response += `<strong>${key}趋势：</strong><br>`
-        if (Array.isArray(data)) {
-          data.forEach(item => {
-            response += `• ${item.date || item.month || '未知时间'}：${item.count}条记录<br>`
-          })
-        } else if (typeof data === 'object') {
-          Object.entries(data).forEach(([time, count]) => {
-            response += `• ${time}：${count}条记录<br>`
-          })
-        }
-        response += '<br>'
-      })
-    } else {
-      response += '暂无趋势数据。'
-    }
-  } else {
-    response += '暂无趋势数据。'
-  }
-  
-  return response
 }
 </script>
 

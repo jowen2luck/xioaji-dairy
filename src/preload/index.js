@@ -10,8 +10,8 @@ const api = {
 // Electron APIs exposed to renderer
 const electronAPI = {
   ipcRenderer: {
-    invoke: (channel, data) => {
-      return ipcRenderer.invoke(channel, data)
+    invoke: (channel, ...args) => {
+      return ipcRenderer.invoke(channel, ...args)
     },
     on: (channel, func) => {
       ipcRenderer.on(channel, (event, ...args) => func(...args))

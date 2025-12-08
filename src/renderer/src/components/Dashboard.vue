@@ -4,405 +4,111 @@
       <div class="tabs-wrap">
         <n-tabs type="line" animated v-model:value="activeTab">
           <template #suffix>
-  <div class="theme-wrap">
-        <ThemeSwitcher />
-      </div>
+            <div class="theme-wrap">
+              <ThemeSwitcher />
+              <n-button
+                text
+                style="margin-left: 8px;"
+                @click="showSettings = true"
+              >
+                <template #icon>
+                  <n-icon size="20">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                      <path fill="currentColor" d="M12 15.5A3.5 3.5 0 0 1 8.5 12A3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5a3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97c0-.33-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1c0 .33.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64z"/>
+                    </svg>
+                  </n-icon>
+                </template>
+              </n-button>
+            </div>
           </template>
-      <n-tab-pane name="dashboard" tab="数据看板">
-        <div class="controls">
-          <n-card style="width: 100%">
-            <FilterBar
-              :project-options="projectOptions"
-              :value="{ query: searchQuery, project: projectFilter, dateRange }"
-              @update:value="onFilterUpdate"
-              @import="importData"
-              @reset="resetFilters"
-              @etl-enhance="startETLEnhancement"
-              :etl-processing="etlProcessing"
-            />
-          </n-card>
-        </div>
-        
-        <n-alert v-if="message" :type="message.type" closable>
-          {{ message.text }}
-        </n-alert>
-        
-        <n-card>
-          <n-statistic label="记录总数" :value="filteredData.length" />
-        </n-card>
-        
-        <n-spin :show="loading">
-          <n-empty v-if="filteredData.length === 0" description="没有找到匹配的记录" />
-          <n-grid v-else cols="1 s:1 m:2 l:3 xl:4 2xl:4" responsive="screen" :x-gap="12" :y-gap="12">
-            <n-grid-item v-for="(item, index) in paginatedData" :key="index">
-              <!-- 根据是否有 AI 元数据选择显示增强或简化卡片 -->
-              <EnhancedRecordCard 
-                v-if="item._ai_meta"
-                :record="item"
-                :compact="false"
-                @tag-click="handleTagClick"
-                @request-analysis="handleAnalysisRequest"
-              />
-              <SimpleRecordCard 
-                v-else
-                :record="item"
-                :compact="false"
-              />
-            </n-grid-item>
-          </n-grid>
-        </n-spin>
-        
-        <div v-if="filteredData.length > 0" class="pagination-container">
-          <n-pagination
-            v-model:page="currentPage"
-            :page-count="pageCount"
-            :page-size="pageSize"
-            :item-count="filteredData.length"
-            @update:page="handlePageChange"
-          />
-        </div>
-      </n-tab-pane>
-      
-      <n-tab-pane name="analysis" tab="数据分析">
-        <AnalysisPage />
-      </n-tab-pane>
-      
+          
+          <n-tab-pane name="dashboard" tab="数据看板">
+            <!-- 使用双栏布局组件 -->
+            <DataBoardTab ref="dataBoardRef" @data-updated="handleDataUpdated" />
+          </n-tab-pane>
+          
+          <n-tab-pane name="analysis" tab="数据分析">
+            <AnalysisPage />
+          </n-tab-pane>
+          
           <n-tab-pane name="agent" tab="智能助手">
             <AgentWorkbench />
           </n-tab-pane>
         </n-tabs>
       </div>
-    
     </div>
+
+    <!-- 全局设置抽屉 -->
+    <GlobalSettings v-model:visible="showSettings" />
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref } from 'vue'
 import AnalysisPage from './AnalysisPage.vue'
-import AgentPage from './AgentPage.vue'
 import AgentWorkbench from './AgentWorkbench.vue'
-import FilterBar from './FilterBar.vue'
+import DataBoardTab from './DataBoardTab.vue'
 import ThemeSwitcher from './ThemeSwitcher.vue'
-import EnhancedRecordCard from './EnhancedRecordCard.vue'
-import SimpleRecordCard from './SimpleRecordCard.vue'
-import { FolderOpenOutline, SearchOutline } from '@vicons/ionicons5'
-import { useThemeVars } from 'naive-ui'
-import { loadConfig } from '../config/assistant.ts'
-
-const themeVars = useThemeVars()
+import GlobalSettings from './GlobalSettings.vue'
 
 // 状态管理
 const activeTab = ref('dashboard')
-const allData = ref([])
-const searchQuery = ref('')
-const projectFilter = ref(null)
-const dateRange = ref(null)
-const startDate = ref('')
-const endDate = ref('')
-const message = ref(null)
-const loading = ref(false)
-const currentPage = ref(1)
-const pageSize = ref(12)
-const etlProcessing = ref(false)
+const dataBoardRef = ref(null)
+const showSettings = ref(false)
 
-// 计算属性
-const projects = computed(() => {
-  const projectSet = new Set()
-  allData.value.forEach(item => {
-    if (item.shanggexiangmu) {
-      projectSet.add(item.shanggexiangmu)
-    }
-  })
-  return Array.from(projectSet)
-})
-
-const projectOptions = computed(() => {
-  return projects.value.map(project => ({
-    label: project,
-    value: project
-  }))
-})
-
-const filteredData = computed(() => {
-  let result = allData.value
-  
-  // 搜索过滤
-  if (searchQuery.value) {
-    const query = searchQuery.value.toLowerCase()
-    result = result.filter(item => {
-      return (item.ganshou && item.ganshou.toLowerCase().includes(query)) ||
-             (item.shanggexiangmu && item.shanggexiangmu.toLowerCase().includes(query))
-    })
-  }
-  
-  // 项目过滤
-  if (projectFilter.value) {
-    result = result.filter(item => item.shanggexiangmu === projectFilter.value)
-  }
-  
-  // 日期过滤
-  if (startDate.value) {
-    result = result.filter(item => item.time >= startDate.value)
-  }
-  
-  if (endDate.value) {
-    result = result.filter(item => item.time <= endDate.value)
-  }
-  
-  return result
-})
-
-const pageCount = computed(() => {
-  return Math.ceil(filteredData.value.length / pageSize.value)
-})
-
-const paginatedData = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value
-  const end = start + pageSize.value
-  return filteredData.value.slice(start, end)
-})
-
-// 方法
-const handlePageChange = (page) => {
-  currentPage.value = page
+// 处理数据更新事件
+const handleDataUpdated = (data) => {
+  console.log('[Dashboard] Data updated:', data?.length, 'records')
 }
-
-const formatTime = (time) => {
-  if (!time) return '未知时间'
-  return new Date(time).toLocaleString('zh-CN')
-}
-
-const formatThoughts = (thoughts) => {
-  if (!thoughts) return ''
-  return thoughts.replace(/\n/g, '<br>')
-}
-
-const handleDateRangeChange = (value) => {
-  if (value && value.length === 2) {
-    startDate.value = new Date(value[0]).toISOString().split('T')[0]
-    endDate.value = new Date(value[1]).toISOString().split('T')[0]
-  } else {
-    startDate.value = ''
-    endDate.value = ''
-  }
-}
-
-const onFilterUpdate = (v) => {
-  searchQuery.value = v.query
-  projectFilter.value = v.project
-  dateRange.value = v.dateRange
-  handleDateRangeChange(v.dateRange)
-}
-
-const showMessage = (text, type = 'info') => {
-  message.value = { text, type }
-  setTimeout(() => {
-    message.value = null
-  }, 5000)
-}
-
-const importData = async () => {
-  try {
-    if (window.electron && window.electron.ipcRenderer) {
-      const result = await window.electron.ipcRenderer.invoke('open-file-dialog')
-      if (result && !result.error) {
-        const previousCount = allData.value.length
-        // 保存数据到本地
-        const saveResult = await window.electron.ipcRenderer.invoke('save-data', result)
-        
-        if (saveResult.success) {
-          // 重新加载合并后的数据
-          const updatedData = await window.electron.ipcRenderer.invoke('load-data')
-          if (updatedData && !updatedData.error) {
-            allData.value = updatedData
-            const currentCount = updatedData.length
-            const addedCount = currentCount - previousCount
-            showMessage(`数据导入成功！新增 ${addedCount} 条记录，总共 ${currentCount} 条记录。`, 'success')
-          } else {
-            showMessage('数据导入成功，但加载更新后数据失败。', 'warning')
-          }
-        } else {
-          showMessage(`数据保存失败: ${saveResult.error}`, 'error')
-        }
-      } else if (result && result.error) {
-        showMessage(`导入数据失败: ${result.error}`, 'error')
-        console.error('导入数据失败:', result.error)
-      } else {
-        showMessage('导入已取消或未选择文件。', 'info')
-      }
-    } else {
-      showMessage('Electron API 不可用', 'error')
-      console.error('Electron API not available')
-    }
-  } catch (error) {
-    showMessage(`导入数据时出错: ${error.message}`, 'error')
-    console.error('导入数据时出错:', error)
-  }
-}
-
-const resetFilters = () => {
-  searchQuery.value = ''
-  projectFilter.value = null
-  dateRange.value = null
-  startDate.value = ''
-  endDate.value = ''
-}
-
-const startETLEnhancement = async () => {
-  try {
-    console.log('[Dashboard] Starting ETL enhancement...')
-    if (!window.electron || !window.electron.ipcRenderer) {
-      showMessage('Electron API 不可用', 'error')
-      return
-    }
-    
-    const config = loadConfig()
-    const etlConfig = {
-      ...config.etl,
-      systemPrompt: config.prompts.etlSystem
-    }
-    
-    if (!etlConfig.enabled) {
-      showMessage('ETL 增强功能未启用', 'warning')
-      return
-    }
-    
-    etlProcessing.value = true
-    showMessage('开始智能增强，使用实际数据，请稍候...', 'info')
-    
-    const result = await window.electron.ipcRenderer.invoke('etl:start', etlConfig)
-    
-    if (result.success) {
-      showMessage(result.message, 'success')
-    } else {
-      showMessage(`ETL 启动失败: ${result.error}`, 'error')
-      etlProcessing.value = false
-    }
-    
-  } catch (error) {
-    console.error('ETL 启动失败:', error)
-    showMessage(`ETL 启动失败: ${error.message}`, 'error')
-    etlProcessing.value = false
-  }
-}
-
-const handleETLEvent = (data) => {
-  if (!data || !data.type) {
-    console.warn('[Dashboard] Invalid ETL event:', data)
-    return
-  }
-  
-  console.log('[Dashboard] ETL Event:', data.type, data.data)
-  
-  switch (data.type) {
-    case 'complete':
-      console.log('[Dashboard] ETL Complete, starting data refresh...')
-      refreshData().then(() => {
-        console.log('[Dashboard] Data refreshed, ending loading state...')
-        etlProcessing.value = false
-        showMessage(
-          `智能增强完成！总计 ${data.data.stats.total} 条，处理 ${data.data.stats.processed} 条，缓存 ${data.data.stats.cached} 条，失败 ${data.data.stats.failed} 条`, 
-          data.data.stats.failed > 0 ? 'warning' : 'success'
-        )
-      }).catch(err => {
-        console.error('[Dashboard] Error refreshing data:', err)
-        etlProcessing.value = false
-        showMessage('数据刷新失败', 'error')
-      })
-      break
-      
-    case 'error':
-      console.error('[Dashboard] ETL Error:', data.data)
-      etlProcessing.value = false
-      showMessage(`智能增强出错: ${data.data.error || '未知错误'}`, 'error')
-      break
-  }
-}
-
-const refreshData = async () => {
-  try {
-    console.log('[Dashboard] Invoking load-data...')
-    const data = await window.electron.ipcRenderer.invoke('load-data')
-    console.log('[Dashboard] Received data:', data ? data.length : 0, 'records')
-    if (data && !data.error) {
-      allData.value = data
-      console.log('[Dashboard] Data updated successfully')
-    } else {
-      console.warn('[Dashboard] Invalid data received:', data)
-    }
-  } catch (error) {
-    console.error('[Dashboard] 刷新数据失败:', error)
-    throw error
-  }
-}
-
-const handleTagClick = (tagType, tagValue) => {
-  console.log('[Dashboard] Tag clicked:', tagType, tagValue)
-  if (tagType === 'mood') {
-    searchQuery.value = tagValue
-  }
-}
-
-const handleAnalysisRequest = (record) => {
-  console.log('[Dashboard] Analysis request for record:', record._id)
-  // 可以实现上次整理逐条记录的配置
-}
-
-// 生命周期
-onMounted(async () => {
-  try {
-    if (window.electron && window.electron.ipcRenderer) {
-      loading.value = true
-      const data = await window.electron.ipcRenderer.invoke('load-data')
-      if (data && !data.error) {
-        allData.value = data
-        if (data.length > 0) {
-          showMessage(`成功加载 ${data.length} 条本地数据。`, 'success')
-        }
-      } else if (data && data.error) {
-        showMessage(`加载数据失败: ${data.error}`, 'error')
-      }
-    } else {
-      // 在浏览器环境中，我们可以模拟一些数据或显示提示
-      console.warn('Electron API not available - running in browser environment')
-      // 可以选择显示提示或加载示例数据
-      // showMessage('Electron API 不可用 - 正在浏览器环境中运行', 'warning')
-    }
-    loading.value = false
-    
-    // 注册 ETL 事件监听
-    if (window.electron && window.electron.ipcRenderer) {
-      window.electron.ipcRenderer.on('etl:event', handleETLEvent)
-    }
-  } catch (error) {
-    showMessage(`加载数据时出错: ${error.message}`, 'error')
-    console.error('加载数据时出错:', error)
-    loading.value = false
-  }
-})
-
-onUnmounted(() => {
-  if (window.electron && window.electron.ipcRenderer) {
-    window.electron.ipcRenderer.removeListener('etl:event', handleETLEvent)
-  }
-})
 </script>
 
 <style scoped>
 .dashboard-container {
-  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 0 16px;
+  overflow: hidden;
 }
 
-.controls { margin-bottom: 24px; }
-.filter-container { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-.filter-item { flex: 1 1 220px; min-width: 220px; }
-
-.header {
-  display: none;
+.top-row {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
-.top-row { display: flex; align-items: center; gap: 12px; }
-.tabs-wrap { flex: 1; min-width: 0; }
-.theme-wrap { flex: none; }
+.tabs-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tabs-wrap :deep(.n-tabs) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.tabs-wrap :deep(.n-tabs-nav) {
+  flex-shrink: 0;
+}
+
+.tabs-wrap :deep(.n-tabs-pane-wrapper) {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tabs-wrap :deep(.n-tab-pane) {
+  height: 100%;
+  overflow: hidden;
+}
+
+.theme-wrap {
+  flex: none;
+}
 </style>

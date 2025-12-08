@@ -1,67 +1,37 @@
 <template>
   <div class="workbench">
-    <n-grid cols="1 s:1 m:3 l:3" responsive="screen" :x-gap="12" :y-gap="12">
-      <n-grid-item :span="2">
+    <div class="workbench-layout">
+      <!-- 左侧：对话区 -->
+      <div class="chat-section">
         <n-card class="panel">
           <div class="chat-content">
             <div class="messages" ref="messagesRef">
               <div class="bubble agent">
-                <div class="bubble-content" v-html="renderMarkdown('请在右侧选择模型与配置，然后开始对话或调用工具。')"></div>
+                <div class="bubble-content" v-html="renderMarkdown('请开始对话或调用工具。点击右上角设置按钮进行配置。')"></div>
                 <div class="time">{{ formatTime(welcomeTime) }}</div>
               </div>
               <div v-for="(m, i) in messages" :key="i" :class="['bubble', m.sender]">
-                <template v-if="m.sender === 'agent' && m.toolTrace && m.toolTrace.length">
-                  <n-collapse>
-                    <n-collapse-item :title="toolTraceTitle(m.toolTrace)">
-                      <div class="trace-wrap">
-                        <div v-for="(s, idx) in m.toolTrace" :key="idx" class="trace-block">
-                          <div class="trace-title">{{ s.name }}</div>
-                          <!-- 意图说明文本 -->
-                          <div v-if="s.type === 'intent' && s.result && s.result.text">
-                            <n-p>{{ s.result.text }}</n-p>
-                          </div>
-                          <!-- 检索结果卡片化展示 -->
-                          <template v-else-if="s.type === 'tool' && s.toolName === 'search_records' && viewOf(s).kind === 'array'">
-                            <div class="trace-table-wrap">
-                              <n-grid cols="1 s:1 m:2 l:3 xl:4" responsive="screen" :x-gap="12" :y-gap="12">
-                                <n-grid-item v-for="(item, i2) in viewOf(s).rows.slice(0, 12)" :key="i2">
-                                  <n-card hoverable>
-                                    <n-space vertical>
-                                      <n-space justify="space-between">
-                                        <n-tag type="info">{{ item.shanggexiangmu || '未分类' }}</n-tag>
-                                        <n-time :time="new Date(item.time)" v-if="item.time" />
-                                      </n-space>
-                                      <n-text depth="secondary">持续时间: {{ item.chixushijian || '-' }}</n-text>
-                                      <n-p v-html="formatThoughts(item.ganshou)"></n-p>
-                                    </n-space>
-                                  </n-card>
-                                </n-grid-item>
-                              </n-grid>
-                            </div>
-                          </template>
-                          <!-- 通用对象视图 -->
-                          <div v-else-if="viewOf(s).kind === 'object'" class="trace-desc-wrap">
-                            <n-descriptions label-placement="left" bordered size="small">
-                              <n-descriptions-item v-for="item in (viewOf(s).items)" :key="item.key" :label="item.label">
-                                <span class="kv">{{ formatValue(item.value) }}</span>
-                              </n-descriptions-item>
-                            </n-descriptions>
-                          </div>
-                          <!-- 通用数组表格视图 -->
-                          <div v-else-if="viewOf(s).kind === 'array'" class="trace-table-wrap">
-                            <n-data-table :columns="columnsOf(viewOf(s))" :data="viewOf(s).rows" size="small" :bordered="true" />
-                          </div>
-                          <!-- 文本视图 -->
-                          <div v-else>
-                            <pre class="tool-result">{{ viewOf(s).text }}</pre>
-                          </div>
-                        </div>
-                      </div>
-                    </n-collapse-item>
-                  </n-collapse>
-                </template>
                 <div class="bubble-content" v-html="m.sender === 'agent' ? renderMarkdown(m.content) : m.content" />
-                <div class="time">{{ formatTime(m.time) }}</div>
+                <div class="bubble-footer">
+                  <span class="time">{{ formatTime(m.time) }}</span>
+                  <!-- 思维记录切换按钮 -->
+                  <n-tooltip v-if="m.reactIndex !== undefined" trigger="hover">
+                    <template #trigger>
+                      <n-button 
+                        quaternary 
+                        circle 
+                        size="tiny" 
+                        class="react-btn"
+                        @click="scrollToReactStep(m.reactIndex, m.conversationId)"
+                      >
+                        <template #icon>
+                          <n-icon size="14"><BrainIcon /></n-icon>
+                        </template>
+                      </n-button>
+                    </template>
+                    查看思维记录
+                  </n-tooltip>
+                </div>
               </div>
             </div>
           </div>
@@ -72,62 +42,36 @@
             </n-input-group>
           </template>
         </n-card>
-      </n-grid-item>
-      <n-grid-item :span="1">
-        <n-card class="panel" title="配置">
-          <n-form label-placement="top">
-            <n-form-item label="推理点 Base URL">
-              <n-select v-model:value="config.selectedBaseURL" :options="baseURLOptions" />
-            </n-form-item>
-            <n-form-item label="模型">
-              <n-select v-model:value="config.selectedModel" :options="currentModels" />
-            </n-form-item>
-            <n-form-item label="系统提示词">
-              <n-input type="textarea" v-model:value="config.systemPrompt" placeholder="描述助手角色、可用工具、输出格式" />
-            </n-form-item>
-            <n-form-item label="意图识别模型">
-              <n-select v-model:value="config.intentModel" :options="currentModels" />
-            </n-form-item>
-            <n-form-item label="温度">
-              <n-input-number v-model:value="config.temperature" :min="0" :max="2" :step="0.1" />
-            </n-form-item>
-            <n-form-item label="Top P">
-              <n-input-number v-model:value="config.top_p" :min="0" :max="1" :step="0.05" />
-            </n-form-item>
-            <n-form-item label="启用工具">
-              <n-checkbox-group v-model:value="enabledTools">
-                <n-space vertical>
-                  <n-checkbox value="search_records">检索记录</n-checkbox>
-                  <n-checkbox value="query_records">查询记录</n-checkbox>
-                  <n-checkbox value="sql_analysis">SQL 分析</n-checkbox>
-                </n-space>
-              </n-checkbox-group>
-            </n-form-item>
-            <n-space>
-              <n-button @click="invoke('search_records')">检索记录</n-button>
-            </n-space>
-          </n-form>
-        </n-card>
-      </n-grid-item>
-    </n-grid>
+      </div>
+
+      <!-- 右侧：思维记录面板（常驻） -->
+      <div class="sidebar-section">
+        <ReActPanel :steps="reactSteps" />
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick, watch, computed } from 'vue'
-import { NGrid, NGridItem, NCard, NForm, NFormItem, NSelect, NInput, NInputNumber, NInputGroup, NButton, NCheckbox, NCheckboxGroup, NSpace, NTag, NCollapse, NCollapseItem, NDescriptions, NDescriptionsItem, NDataTable, NTime, NText, NP } from 'naive-ui'
+import { ref, onMounted, nextTick, watch, computed, h } from 'vue'
 import MarkdownIt from 'markdown-it'
 import { loadConfig, saveConfig, DEFAULT_CONFIG } from '@renderer/config/assistant'
-import { toView } from '@renderer/utils/jsonView'
+import ReActPanel from './ReActPanel.vue'
+
+// 思维图标
+const BrainIcon = { render: () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', innerHTML: '<path fill="currentColor" d="M12 2a9 9 0 0 0-9 9c0 4.17 2.84 7.67 6.69 8.69L12 22l2.31-2.31C18.16 18.67 21 15.17 21 11a9 9 0 0 0-9-9m0 2c1.66 0 3 1.34 3 3s-1.34 3-3 3s-3-1.34-3-3s1.34-3 3-3"/>' }) }
 
 const messages = ref([])
 const input = ref('')
 const messagesRef = ref(null)
-const traceSteps = ref([])
 const welcomeTime = ref(new Date())
-const expandedStepNames = ref([])
-const allStepsExpanded = ref(false)
 const sending = ref(false)
+
+// ReAct 思维链面板状态（常驻显示）
+const reactSteps = ref([])
+
+// 历史对话的思维记录缓存（每次对话的思维记录）
+const conversationReacts = ref({})
 
 // 初始化MarkdownIt
 const md = new MarkdownIt({
@@ -136,79 +80,64 @@ const md = new MarkdownIt({
   typographer: true
 })
 
-
+// 从全局设置加载配置
 const c0 = loadConfig()
-const config = ref({
-  selectedBaseURL: c0.selectedBaseURL,
-  selectedModel: c0.selectedModel,
-  systemPrompt: c0.prompts.chatSystem,
-  temperature: c0.temperature,
-  top_p: c0.top_p,
-  useMock: false,
-  intentModel: c0.intentModel
-})
-
-// 监听配置变化并保存到本地存储
-watch(() => config.value.selectedModel, (newModel) => {
-  saveConfig({ selectedModel: newModel })
-})
-
-watch(() => config.value.selectedBaseURL, (newBaseURL) => {
-  saveConfig({ selectedBaseURL: newBaseURL })
-})
-
-watch(() => config.value.systemPrompt, (newPrompt) => {
-  saveConfig({ prompts: { chatSystem: newPrompt } })
-})
-
-watch(() => config.value.temperature, (newTemp) => {
-  saveConfig({ temperature: newTemp })
-})
-
-watch(() => config.value.top_p, (newTopP) => {
-  saveConfig({ top_p: newTopP })
-})
-
-watch(() => config.value.useMock, (val) => {
-  /* mock flag ignored */
-})
-
-watch(() => config.value.intentModel, (val) => {
-  saveConfig({ intentModel: val })
-})
-
-const modelOptions = ref([])
-
-const baseURLOptions = computed(() => {
-  const urls = DEFAULT_CONFIG.baseURLs || []
-  return urls.map(entry => ({
-    label: entry.url,
-    value: entry.url
-  }))
-})
-
-const currentModels = computed(() => {
-  const urls = DEFAULT_CONFIG.baseURLs || []
-  const selectedEntry = urls.find(entry => entry.url === config.value.selectedBaseURL)
-  return (selectedEntry?.models || []).map(model => ({
-    label: model,
-    value: model
-  }))
-})
-
-// 根据用户要求，默认启用三个工具
-const enabledTools = ref(['search_records', 'query_records', 'sql_analysis'])
+const enabledTools = ref(c0.enabledTools || ['search_records', 'query_records', 'sql_analysis'])
 const TOOL_LABELS = { 
   search_records: '检索记录',
   query_records: '查询记录',
   sql_analysis: 'SQL 分析'
 }
-const intentTags = ref([])
-const steps = ref([])
+
+// 滚动到指定的思维步骤（支持切换历史对话）
+const scrollToReactStep = (stepIndex, conversationId) => {
+  // 如果指定了对话ID，先切换思维记录
+  if (conversationId && conversationReacts.value[conversationId]) {
+    reactSteps.value = conversationReacts.value[conversationId]
+  }
+  // 发送事件通知 ReActPanel 展开指定步骤
+  const event = new CustomEvent('expand-react-step', { detail: { stepIndex } })
+  window.dispatchEvent(event)
+}
+
+// 添加思维步骤到面板
+const addReActStep = (step) => {
+  reactSteps.value.push({
+    ...step,
+    time: new Date()
+  })
+}
+
+// 清空思维步骤
+const clearReActSteps = () => {
+  reactSteps.value = []
+}
+
+// 保存当前对话的思维记录
+const saveCurrentReacts = (conversationId) => {
+  if (conversationId && reactSteps.value.length > 0) {
+    conversationReacts.value[conversationId] = [...reactSteps.value]
+    // 持久化到 localStorage
+    try {
+      localStorage.setItem('assistant-reacts', JSON.stringify(conversationReacts.value))
+    } catch (e) {
+      console.error('保存思维记录失败', e)
+    }
+  }
+}
+
+// 监听全局设置更新
+const handleSettingsUpdate = (event) => {
+  const { assistant } = event.detail || {}
+  if (assistant) {
+    enabledTools.value = assistant.enabledTools || enabledTools.value
+  }
+}
 
 onMounted(async () => {
-  // 强制关闭模拟，以真实工作流为准
-  config.value.useMock = false
+  // 监听设置更新事件
+  window.addEventListener('settings-updated', handleSettingsUpdate)
+  
   // 加载历史会话
   try {
     const raw = localStorage.getItem('assistant-conversation')
@@ -218,6 +147,19 @@ onMounted(async () => {
     }
   } catch (e) {
     console.error('加载历史会话失败', e)
+  }
+  
+  // 加载历史思维记录
+  try {
+    const reactsRaw = localStorage.getItem('assistant-reacts')
+    if (reactsRaw) {
+      const parsed = JSON.parse(reactsRaw)
+      if (parsed && typeof parsed === 'object') {
+        conversationReacts.value = parsed
+      }
+    }
+  } catch (e) {
+    console.error('加载思维记录失败', e)
   }
 })
 
@@ -234,134 +176,149 @@ async function send() {
   const text = input.value.trim()
   if (!text) return
 
+  // 从全局配置加载
+  const config = loadConfig()
+
   console.log('[send] input', text)
   sending.value = true
-  messages.value.push({ content: text, sender: 'user', time: new Date().toISOString() })
+  
+  // 生成对话ID
+  const conversationId = `conv_${Date.now()}`
+  
+  messages.value.push({ content: text, sender: 'user', time: new Date().toISOString(), reactIndex: 0, conversationId })
   input.value = ''
-  traceSteps.value = []
-  steps.value = []
-  steps.value.push({ type: 'think', name: `理解问题：${text}`, result: { query: text } })
-  traceSteps.value.push({ type: 'think', title: '理解问题', detail: text, time: new Date() })
-
-  // 执行意图分析
-  console.log('[intent] analyzing start')
-  traceSteps.value.push({ type: 'intent', title: '意图分析', detail: '正在分析用户意图...', time: new Date() })
+  
+  // 清空并初始化思维链
+  clearReActSteps()
+  
+  // 推送：用户输入
+  addReActStep({ 
+    type: 'user_query', 
+    action: 'user_query',
+    query: text,
+    timestamp: new Date().toISOString()
+  })
+  
+  // 推送：加载中
+  const loadingStepIndex = reactSteps.value.length
+  addReActStep({ 
+    type: 'loading', 
+    action: 'loading',
+    detail: '正在分析并调用工具...',
+    timestamp: new Date().toISOString()
+  })
   
   const nowStr = new Date().toLocaleString('zh-CN', { hour12: false })
   const sysinfo = `\n【系统信息】当前时间：${nowStr}；时区：UTC+8；语言：中文。`
   const messagesPayload = [
-    { role: 'system', content: `${config.value.systemPrompt}${sysinfo}` },
+    { role: 'system', content: `${config.prompts.chatSystem}${sysinfo}` },
     { role: 'user', content: text }
   ]
-  console.log('[send] messagesPayload', messagesPayload)
 
   const tools = enabledTools.value.map(name => ({ type: 'function', function: { name } }))
   console.log('[send] enabledTools', enabledTools.value)
+  
   let result
   try {
-    let requestConfig={ 
+    let requestConfig = { 
       messages: messagesPayload, 
-      model: config.value.selectedModel, 
-      baseURL: config.value.selectedBaseURL, 
+      model: config.selectedModel, 
+      baseURL: config.selectedBaseURL, 
       tools, 
       userQuery: text,
       config: { 
-        temperature: config.value.temperature, 
-        top_p: config.value.top_p 
+        temperature: config.temperature, 
+        top_p: config.top_p 
       },
-      mock: config.value.useMock,
-      intentModel: config.value.intentModel
+      mock: false,
+      intentModel: config.intentModel
     }
     console.log('[assistant:chat] request', requestConfig)
     result = await window.assistant?.chat?.(requestConfig)
     console.log('[assistant:chat] result', result)
   } catch (e) {
-    const errDetail = escapeHTML(JSON.stringify({ name: e?.name, message: e?.message, stack: e?.stack }, null, 2))
     console.log('[assistant:chat] exception', e)
-    steps.value.push({ type: 'error', name: '调用异常', result: { name: e?.name, message: e?.message } })
+    // 移除加载状态，推送错误
+    reactSteps.value.splice(loadingStepIndex, 1)
+    addReActStep({ 
+      type: 'error', 
+      action: 'error',
+      reasoning: `调用异常：${e?.message || '未知错误'}`,
+      timestamp: new Date().toISOString()
+    })
+    const errDetail = escapeHTML(JSON.stringify({ name: e?.name, message: e?.message }, null, 2))
     messages.value.push({ content: `<pre>${errDetail}</pre>`, sender: 'agent', time: new Date().toISOString() })
     sending.value = false
     return
   }
 
-  if (result?.success) {
-    
-    if (Array.isArray(result.data?.intentTools)) {
-      const labels = result.data.intentTools.map(n => TOOL_LABELS[n] || n)
-      console.log('[intent] tools', result.data.intentTools)
-      intentTags.value = labels
-      steps.value.push({ type: 'intent', name: `意图建议：${labels.join('、')}`, result: { tools: labels } })
-      traceSteps.value.push({ type: 'intent', title: '意图分析结果', detail: `建议使用工具: ${labels.join('、')}` , time: new Date() })
-    }
-    // 意图说明文本（模型返回的语句）
-    const intentReason = result?.data?.debug?.intentText || result?.data?.intentText || result?.data?.raw?.choices?.[0]?.message?.content
-    if (intentReason) {
-      steps.value.push({ type: 'intent', name: '意图说明', result: { text: intentReason } })
-    }
-    const debugInfo = result.data?.debug ? JSON.stringify(result.data.debug, null, 2) : null
-    if (debugInfo) {
-      console.log('[debug]', result.data.debug)
-      steps.value.push({ type: 'debug', name: '调试信息', result: JSON.parse(debugInfo) })
-      const extracted = result.data?.debug?.extracted
-      console.log('[think] extracted', extracted)
-      if (extracted) steps.value.push({ type: 'think', name: '理解问题（解析结果）', result: extracted })
-    }
+  // 移除加载状态
+  reactSteps.value.splice(loadingStepIndex, 1)
 
-    // ReAct 模式：从 state.steps 中提取工具调用信息
+  if (result?.success) {
+    // 从后端获取完整的 ReAct 步骤
     const stateSteps = result.data?.state?.steps || []
+    console.log('[ReAct] Backend steps:', stateSteps)
+    
+    // 推送每个 ReAct 迭代步骤
+    stateSteps.forEach(step => {
+      addReActStep({
+        ...step,
+        type: step.action, // 使用 action 作为 type
+        time: new Date(step.timestamp || Date.now())
+      })
+    })
+    
+    // 获取最终答案
+    const finalAnswer = result.data?.content
+    
+    if (finalAnswer) {
+      console.log('[ReAct] Final answer received, length:', finalAnswer.length)
+      
+      // 添加最终答案步骤到思维链
+      addReActStep({
+        type: 'final_answer',
+        action: 'final_answer',
+        reasoning: '已根据工具结果生成最终回复',
+        timestamp: new Date().toISOString()
+      })
+      
+      // 流式输出最终答案（关联思维记录索引）
+      const streamIndex = messages.value.length
+      const finalReactIndex = reactSteps.value.length - 1 // 关联最后一个思维步骤
+      messages.value.push({ content: '', sender: 'agent', time: new Date().toISOString(), isStreaming: true, reactIndex: finalReactIndex, conversationId })
+      
+      await streamMessageContent(streamIndex, finalAnswer)
+      messages.value[streamIndex].isStreaming = false
+      
+      // 保存当前对话的思维记录
+      saveCurrentReacts(conversationId)
+      
+      try { localStorage.setItem('assistant-conversation', JSON.stringify(messages.value)) } catch {}
+      await nextTick()
+      if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight
+      sending.value = false
+      return
+    }
+    
+    // 向后兼容：如果没有 finalAnswer 但有工具结果
     const toolSteps = stateSteps.filter(step => step.action === 'tool_calls')
     const allToolResults = []
-    
-    // 收集所有迭代中的工具调用结果
     toolSteps.forEach(step => {
       if (step.results && Array.isArray(step.results)) {
         allToolResults.push(...step.results)
       }
     })
-
-    console.log('[tools] ReAct steps:', stateSteps.length, 'tool results:', allToolResults.length)
     
-    const called = allToolResults.map(t => ({ 
-      name: TOOL_LABELS[t.name] || t.name, 
-      toolName: t.name, 
-      res: t.result 
-    }))
-    
-    called.forEach(c => steps.value.push({ type: 'tool', name: c.name, toolName: c.toolName, result: c.res }))
-    traceSteps.value.push({ type: 'tool', title: '调用工具', detail: called.map(c => c.name).join('、') || '无' , time: new Date() })
-    
-    // ReAct 模式：最终答案可能直接在 content 中
-    const finalAnswer = result.data?.content
-    
-    if (finalAnswer) {
-      // ReAct 已经生成最终答案，直接展示
-      console.log('[ReAct] Final answer received, length:', finalAnswer.length)
-      const streamIndex = messages.value.length
-      messages.value.push({ content: '', sender: 'agent', time: new Date().toISOString(), isStreaming: true })
-      
-      const trace = [...steps.value]
-      trace.push({ type: 'final', name: '生成回复', result: finalAnswer })
-      
-      await streamMessageContent(streamIndex, finalAnswer)
-      messages.value[streamIndex].isStreaming = false
-      messages.value[streamIndex].toolTrace = trace
-      
-      try { localStorage.setItem('assistant-conversation', JSON.stringify(messages.value)) } catch {}
-      steps.value = []
-      await nextTick(); if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight
-      traceSteps.value.push({ type: 'result', title: '生成回复', detail: '完成', time: new Date() })
-      sending.value = false
-      return
-    }
-    
-    // 向后兼容：旧的单次工具调用模式
-    const hasToolOutput = called.length > 0
-    if (!hasToolOutput) {
-      const msg = '未执行任何工具或未返回结果，已停止生成。'
-      console.log('[flow] stop', msg)
-      steps.value.push({ type: 'error', name: '流程中止', result: { message: msg } })
+    if (allToolResults.length === 0) {
+      const msg = '未执行任何工具或未返回结果。'
+      addReActStep({ 
+        type: 'error', 
+        action: 'error',
+        reasoning: msg,
+        timestamp: new Date().toISOString()
+      })
       messages.value.push({ content: msg, sender: 'agent', time: new Date().toISOString() })
-      await nextTick(); if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight
       sending.value = false
       return
     }
@@ -369,72 +326,76 @@ async function send() {
     // 旧模式：需要手动综合工具结果
     const toolPayload = allToolResults.map(t => ({ name: t.name, result: t.result }))
     const synthMessages = [
-      { role: 'system', content: `${config.value.systemPrompt}${sysinfo}。请基于下列工具输出，按照系统提示词回答用户的问题。` },
+      { role: 'system', content: `${config.prompts.chatSystem}${sysinfo}。请基于下列工具输出，按照系统提示词回答用户的问题。` },
       { role: 'user', content: `用户问题：${text}\n工具输出：\n${JSON.stringify(toolPayload, null, 2)}` }
     ]
     const streamIndex = messages.value.length
     messages.value.push({ content: '', sender: 'agent', time: new Date().toISOString(), isStreaming: true })
-    console.log('[synthesis] messages', synthMessages)
+    
     let synth
     try {
       synth = await window.assistant?.chat?.({
         messages: synthMessages,
-        model: config.value.selectedModel,
-        baseURL: config.value.selectedBaseURL,
+        model: config.selectedModel,
+        baseURL: config.selectedBaseURL,
         tools: [],
         userQuery: '',
-        config: { temperature: config.value.temperature, top_p: config.value.top_p },
+        config: { temperature: config.temperature, top_p: config.top_p },
         mock: false,
-        intentModel: config.value.intentModel,
+        intentModel: config.intentModel,
         disableTools: true
       })
-      console.log('[synthesis] result', synth)
     } catch (e) {
       const msg = `生成阶段失败：${e?.message || '未知错误'}`
-      steps.value.push({ type: 'error', name: '生成失败', result: { message: msg } })
       messages.value[streamIndex] = { content: msg, sender: 'agent', time: new Date().toISOString() }
-      await nextTick(); if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight
       sending.value = false
       return
     }
+    
     const final = synth?.data?.content || synth?.data?.raw?.choices?.[0]?.message?.content
-    console.log('[synthesis] content', final)
     if (!final) {
       const msg = '模型未生成最终回答'
-      steps.value.push({ type: 'error', name: '生成为空', result: { message: msg } })
       messages.value[streamIndex] = { content: msg, sender: 'agent', time: new Date().toISOString() }
-      await nextTick(); if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight
       sending.value = false
       return
     }
-    const trace = [...steps.value]
-    trace.push({ type: 'final', name: '生成回复', result: final })
+    
     await streamMessageContent(streamIndex, final)
     messages.value[streamIndex].isStreaming = false
-    messages.value[streamIndex].toolTrace = trace
     try { localStorage.setItem('assistant-conversation', JSON.stringify(messages.value)) } catch {}
-    steps.value = []
-    await nextTick(); if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight
-    traceSteps.value.push({ type: 'result', title: '生成回复', detail: '完成', time: new Date() })
+    await nextTick()
+    if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight
   } else {
     const errDetail = escapeHTML(JSON.stringify(result || {}, null, 2))
-    console.log('[assistant:chat] failed', result)
-    steps.value.push({ type: 'error', name: '调用失败', result: result || {} })
+    addReActStep({ 
+      type: 'error', 
+      action: 'error',
+      reasoning: `调用失败：${result?.error?.message || '未知错误'}`,
+      timestamp: new Date().toISOString()
+    })
     messages.value.push({ content: `<pre>${errDetail}</pre>`, sender: 'agent', time: new Date().toISOString() })
     try { localStorage.setItem('assistant-conversation', JSON.stringify(messages.value)) } catch {}
-    sending.value = false
   }
+  
+  sending.value = false
 }
 
 async function invoke(name) {
-  traceSteps.value = []
-  traceSteps.value.push({ type: 'tool', title: '直接调用工具', detail: name, time: new Date() })
+  clearReActSteps()
+  addReActStep({ type: 'tool_calls', action: 'tool_calls', tools: [{ name }], timestamp: new Date().toISOString() })
   const res = await window.assistant?.invokeTool?.(name, {})
   if (res?.success) {
-    const trace = [{ type: 'tool', name: `直接调用：${name}`, toolName: name, result: res.data }]
-    messages.value.push({ content: '工具调用完成', sender: 'agent', time: new Date(), toolTrace: trace })
+    addReActStep({ 
+      type: 'tool_calls', 
+      action: 'tool_calls', 
+      reasoning: '工具调用完成',
+      results: [{ name, result: res.data, success: true }],
+      timestamp: new Date().toISOString()
+    })
+    messages.value.push({ content: '工具调用完成', sender: 'agent', time: new Date() })
     try { localStorage.setItem('assistant-conversation', JSON.stringify(messages.value)) } catch {}
   } else {
+    addReActStep({ type: 'error', action: 'error', reasoning: `失败：${res?.error}`, timestamp: new Date().toISOString() })
     messages.value.push({ content: `失败：${res?.error}`, sender: 'agent', time: new Date() })
     try { localStorage.setItem('assistant-conversation', JSON.stringify(messages.value)) } catch {}
   }
@@ -449,27 +410,6 @@ function renderMarkdown(content) {
 }
 
 function onEnter() { if (!sending.value) send() }
-
-function toolTraceTitle(trace) {
-  const tools = trace.filter(t => t.type === 'tool').map(t => t.name)
-  const uniq = Array.from(new Set(tools))
-  return `工具链（${uniq.join('、') || '无'}）`
-}
-
-function viewOf(step) {
-  if (!step) return { kind: 'text', text: '' }
-  const name = step.toolName || undefined
-  return toView(step.result, name)
-}
-
-function columnsOf(view) {
-  return (view.columns || []).map(k => ({ title: k, key: k }))
-}
-
-function formatValue(v) {
-  if (typeof v === 'string') return v
-  try { return JSON.stringify(v) } catch { return String(v) }
-}
 
 function formatThoughts(thoughts) {
   if (!thoughts) return ''
@@ -488,23 +428,6 @@ async function streamMessageContent(index, text) {
     }, 60)
   })
 }
-
-// 切换所有步骤的展开/收缩状态
-function toggleAllSteps() {
-  if (allStepsExpanded.value) {
-    // 收起所有
-    expandedStepNames.value = []
-  } else {
-    // 展开所有
-    expandedStepNames.value = steps.value.map((_, i) => i)
-  }
-  allStepsExpanded.value = !allStepsExpanded.value
-}
-
-// 监听展开状态变化
-watch(expandedStepNames, (newVal) => {
-  allStepsExpanded.value = newVal.length === steps.value.length
-})
 </script>
 
 <style scoped>
@@ -513,26 +436,41 @@ watch(expandedStepNames, (newVal) => {
   height: calc(100vh - 60px);
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
-/* 让 grid 自己决定高度，不强制 100%（你的 bug 来源之一） */
-::v-deep() .n-grid {
+.workbench-layout {
+  display: flex;
   flex: 1;
   min-height: 0;
+  gap: 12px;
 }
 
-/* --- 2. 左右两侧的卡片都占满高度 --- */
+/* 左侧对话区 */
+.chat-section {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 右侧思维记录面板（常驻） */
+.sidebar-section {
+  width: 360px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* --- 2. 卡片样式 --- */
 .panel {
-  height: 90vh;
+  height: 100%;
   display: flex;
   flex-direction: column;
   background: var(--color-card-bg);
   overflow: hidden;
 }
 
-/* 修复配置页按钮错乱的关键点：保持内容正常流动 */
-::v-deep() .n-card__content {
+:deep(.n-card__content) {
   flex: 1;
   min-height: 0;
   display: flex;
@@ -540,8 +478,7 @@ watch(expandedStepNames, (newVal) => {
   overflow: auto;
 }
 
-/* 页脚保持正常 */
-::v-deep() .n-card__footer {
+:deep(.n-card__footer) {
   flex-shrink: 0;
 }
 
@@ -553,47 +490,21 @@ watch(expandedStepNames, (newVal) => {
   flex-direction: column;
 }
 
-/* 可滚动区域（唯一允许滚动的地方） */
 .messages {
   flex: 1;
   min-height: 0;
-  /* max-height: calc(900vh - 360px); */
   overflow-y: auto;
   padding: 12px;
 }
 
-/* --- 4. 工具步骤区域 --- */
-.tool-steps { display: none; }
-
-.tool-steps-header { 
-  margin-bottom: 8px; 
-  text-align: right; 
-}
-
-.tool-result {
-  margin: 0;
-  font-size: 12px;
-  background: var(--color-background-soft);
-  color: var(--color-text);
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  padding: 6px;
-  overflow: auto;
-  white-space: pre;
-  max-height: 200px;
-}
-
-.trace-wrap { max-height: 320px; overflow: auto; }
-.trace-table-wrap { max-height: 280px; overflow: auto; }
-.trace-desc-wrap { max-height: 280px; overflow: auto; }
-
-/* --- 5. 气泡 --- */
+/* --- 4. 气泡 --- */
 .bubble {
   max-width: 72%;
   margin: 10px 0;
   padding: 10px 14px;
   border-radius: 14px;
   box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+  position: relative;
 }
 
 .bubble.agent {
@@ -614,14 +525,50 @@ watch(expandedStepNames, (newVal) => {
   color: var(--color-text);
 }
 
-.kv { white-space: break-spaces; }
-
 .time {
   font-size: 11px;
   opacity: 0.7;
-  margin-top: 4px;
   color: var(--color-text);
 }
-.trace-block { margin-bottom: 8px; }
-.trace-title { font-weight: 600; margin-bottom: 6px; }
+
+/* 气泡底部 */
+.bubble-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+  gap: 8px;
+}
+
+/* 思维记录按钮 */
+.react-btn {
+  opacity: 0.6;
+  transition: opacity 0.2s ease;
+}
+
+.react-btn:hover {
+  opacity: 1;
+}
+
+.bubble:hover .react-btn {
+  opacity: 0.8;
+}
+
+/* 响应式布局 */
+@media (max-width: 1200px) {
+  .sidebar-section {
+    width: 300px;
+  }
+}
+
+@media (max-width: 768px) {
+  .workbench-layout {
+    flex-direction: column;
+  }
+  
+  .sidebar-section {
+    width: 100%;
+    height: 250px;
+  }
+}
 </style>

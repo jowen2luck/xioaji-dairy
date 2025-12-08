@@ -21,6 +21,19 @@ export type ETLConfig = {
   promptVersion: string
 }
 
+export type SerendipityConfig = {
+  preferHighEnergy: boolean
+  minEnergyLevel: number
+  preferWithQuotes: boolean
+  excludeMoodTags: string[]
+}
+
+export type PaginationConfig = {
+  pageSize: number
+  enableQuickJump: boolean
+  showPageInfo: boolean
+}
+
 export type AssistantConfig = {
   selectedBaseURL: string
   selectedModel: string
@@ -38,6 +51,8 @@ export type AssistantConfig = {
     maxResults: number
   }
   etl: ETLConfig
+  serendipity: SerendipityConfig
+  pagination: PaginationConfig
 }
 
 const LS_KEY = 'assistant-config'
@@ -45,8 +60,8 @@ const LS_KEY = 'assistant-config'
 
 export const DEFAULT_CONFIG: AssistantConfig = {
   selectedBaseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-  selectedModel: 'qwen-plus-2025-09-11',
-  intentModel: 'qwen-plus-2025-09-11',
+  selectedModel: 'qwen3-max-2025-09-23',
+  intentModel: 'qwen3-max-2025-09-23',
 
   baseURLs: [
 
@@ -286,6 +301,17 @@ now，请 according user question，**strictly follow above process**，choose a
   memory: {
     recentIntents: [],
     lastUsedTools: []
+  },
+  serendipity: {
+    preferHighEnergy: true,
+    minEnergyLevel: 6,
+    preferWithQuotes: true,
+    excludeMoodTags: ['焦虑', '沮丧', '愤怒', '难过', '疲惫']
+  },
+  pagination: {
+    pageSize: 6,
+    enableQuickJump: true,
+    showPageInfo: true
   }
 }
 
