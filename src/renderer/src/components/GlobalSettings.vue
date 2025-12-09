@@ -26,6 +26,15 @@
               />
             </n-form-item>
             
+            <n-form-item label="意图识别提示词">
+              <n-input 
+                type="textarea" 
+                v-model:value="assistantConfig.intentSystem" 
+                placeholder="意图识别提示词"
+                :autosize="{ minRows: 4, maxRows: 10 }"
+              />
+            </n-form-item>
+            
             <n-form-item label="意图识别模型">
               <n-select v-model:value="assistantConfig.intentModel" :options="currentModels" />
             </n-form-item>
@@ -60,6 +69,9 @@
                   <n-checkbox value="search_records">检索记录（语义搜索）</n-checkbox>
                   <n-checkbox value="query_records">查询记录（精确筛选）</n-checkbox>
                   <n-checkbox value="sql_analysis">SQL 分析（统计分析）</n-checkbox>
+                  <n-checkbox value="calendar_resolver">日期解析（时间表达解析）</n-checkbox>
+                  <n-checkbox value="metadata_explorer">元数据浏览（字段值查询）</n-checkbox>
+                  <n-checkbox value="insight_analyst">洞察分析（深度模式识别）</n-checkbox>
                 </n-space>
               </n-checkbox-group>
             </n-form-item>
@@ -184,9 +196,10 @@ const assistantConfig = ref({
   selectedBaseURL: loadedConfig.selectedBaseURL,
   selectedModel: loadedConfig.selectedModel,
   systemPrompt: loadedConfig.prompts.chatSystem,
+  intentSystem: loadedConfig.prompts.intentSystem,
+  intentModel: loadedConfig.intentModel,
   temperature: loadedConfig.temperature,
   top_p: loadedConfig.top_p,
-  intentModel: loadedConfig.intentModel,
   enabledTools: [...loadedConfig.enabledTools]
 })
 
@@ -228,7 +241,8 @@ const saveSettings = () => {
     top_p: assistantConfig.value.top_p,
     enabledTools: assistantConfig.value.enabledTools,
     prompts: {
-      chatSystem: assistantConfig.value.systemPrompt
+      chatSystem: assistantConfig.value.systemPrompt,
+      intentSystem: assistantConfig.value.intentSystem
     }
   })
 
@@ -253,9 +267,10 @@ const resetToDefault = () => {
       selectedBaseURL: DEFAULT_CONFIG.selectedBaseURL,
       selectedModel: DEFAULT_CONFIG.selectedModel,
       systemPrompt: DEFAULT_CONFIG.prompts.chatSystem,
+      intentSystem: DEFAULT_CONFIG.prompts.intentSystem,
+      intentModel: DEFAULT_CONFIG.intentModel,
       temperature: DEFAULT_CONFIG.temperature,
       top_p: DEFAULT_CONFIG.top_p,
-      intentModel: DEFAULT_CONFIG.intentModel,
       enabledTools: [...DEFAULT_CONFIG.enabledTools]
     }
     // 重新加载默认图表配置

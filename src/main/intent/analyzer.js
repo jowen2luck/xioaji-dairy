@@ -1,122 +1,148 @@
 /**
  * 意图分析器
- * 基于用户查询的关键词匹配，推荐合适的工具
+ * 使用 LLM 进行结构化的意图判断，输出完整的上下文对象
+ * 包含时间锚定、实体提取、过滤提示等信息
  */
 
+import { getIntentPrompt, COMPLEXITY_MAX_ITERATIONS } from '../config/intentPrompts.js'
+
 /**
- * 工具意图规则映射
+ * 使用 LLM 分析用户意图，返回结构化的意图上下文
+ * @param {string} userQuery - 用户查询文本
+ * @param {Object} llm - LLM 实例
+ * @returns {Promise<Object>} 结构化的意图上下文对象
  */
-const INTENT_PATTERNS = {
-  search_records: [
-    // 语义搜索关键词
-    '搜索', '查找', '找', '检索', 
-    '孤独', '焦虑', '开心', '难过', '压力',
-    '情绪', '心情', '感受', '体验',
-    '类似', '相关', '像',
-    // 时间范围的模糊描述
-    '最近', '之前', '那段时间'
-  ],
-  
-  query_records: [
-    // 精确查询关键词
-    '时间', '日期', '周末', '工作日',
-    '项目', '分类', '持续时间', '时长',
-    '上周', '本周', '上个月', '本月',
-    '几点', '早上', '下午', '晚上', '深夜',
-    '多久', '超过', '小于', '大于'
-  ],
-  
-  sql_analysis: [
-    // 统计分析关键词
-    '统计', '分析', '总结', '对比', '比较',
-    '趋势', '变化', '分布', '占比',
-    '最多', '最少', '平均', '总共',
-    '关系', '相关性', '影响',
-    '排行', '排名', 'TOP',
-    '哪个', '哪些', '什么时候',
-    // 聚合问题
-    '有多少', '多少次', '频率'
-  ]
+export async function analyzeIntentWithLLM(userQuery, llm) {
+  if (!userQuery || typeof userQuery !== 'string') {
+    return null
+  }
+
+  try {
+    console.log('[Intent] Analyzing with LLM:', userQuery)
+    
+    // 获取意图分析的系统提示词
+    const systemPrompt = getIntentPrompt()
+    
+    // 调用 LLM
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userQuery }
+    ]
+    
+    const response = await llm.invoke(messages)
+    const content = typeof response === 'string' ? response : response.content
+    
+    console.log('[Intent] LLM response:', content)
+    
+    // 解析 JSON 响应
+    let intentContext
+    try {
+      // 尝试提取 JSON（可能被包裹在代码块中）
+      const jsonMatch = content.match(/```json\s*([\s\S]*?)```/) || content.match(/```\s*([\s\S]*?)```/)
+      const jsonStr = jsonMatch ? jsonMatch[1] : content
+      intentContext = JSON.parse(jsonStr.trim())
+    } catch (parseError) {
+      console.error('[Intent] Failed to parse JSON response:', parseError)
+      // 降级到关键词匹配
+      return analyzeIntentByKeywords(userQuery)
+    }
+    
+    // 验证必需字段
+    if (!intentContext.primary_intent || !intentContext.complexity) {
+      console.warn('[Intent] Invalid intent context, using fallback')
+      return analyzeIntentByKeywords(userQuery)
+    }
+    
+    // 添加推荐的最大迭代次数
+    intentContext.maxIterations = COMPLEXITY_MAX_ITERATIONS[intentContext.complexity] || 3
+    
+    console.log('[Intent] Structured intent context:', intentContext)
+    return intentContext
+    
+  } catch (error) {
+    console.error('[Intent] LLM analysis error:', error)
+    // 降级到关键词匹配
+    return analyzeIntentByKeywords(userQuery)
+  }
 }
 
 /**
- * 分析用户查询意图，返回推荐的工具列表
- * @param {string} query - 用户查询文本
- * @param {Array<string>} availableTools - 可用的工具名称列表
- * @returns {Array<string>} 推荐的工具名称列表
+ * 【已废弃】旧版关键词匹配方法，保留用于向后兼容
+ * 请使用 analyzeIntentWithLLM 进行结构化意图分析
  */
 export function analyzeIntent(query, availableTools = []) {
-  if (!query || typeof query !== 'string') {
-    return []
-  }
-
-  const queryLower = query.toLowerCase()
-  const scores = {}
-
-  // 为所有可用工具初始化分数
-  availableTools.forEach(tool => {
-    scores[tool] = 0
-  })
-
-  // 计算每个工具的匹配分数
-  for (const [toolName, patterns] of Object.entries(INTENT_PATTERNS)) {
-    // 只考虑可用的工具
-    if (!availableTools.includes(toolName)) {
-      continue
-    }
-
-    for (const pattern of patterns) {
-      if (queryLower.includes(pattern.toLowerCase())) {
-        scores[toolName] = (scores[toolName] || 0) + 1
-      }
-    }
-  }
-
-  // 特殊规则：复杂分析问题优先使用 sql_analysis
-  const analysisKeywords = ['为什么', '原因', '影响', '关联', '趋势', '变化']
-  const hasAnalysisIntent = analysisKeywords.some(kw => queryLower.includes(kw))
+  console.warn('[Intent] analyzeIntent() is deprecated, use analyzeIntentWithLLM() instead')
   
-  if (hasAnalysisIntent && availableTools.includes('sql_analysis')) {
-    scores.sql_analysis = (scores.sql_analysis || 0) + 3
-  }
-
-  // 特殊规则：明确的时间范围查询优先 query_records
-  const timeRangeKeywords = ['上周', '本周', '上个月', '本月', '昨天', '今天']
-  const hasTimeRange = timeRangeKeywords.some(kw => queryLower.includes(kw))
+  const intentContext = analyzeIntentByKeywords(query)
   
-  if (hasTimeRange && availableTools.includes('query_records')) {
-    scores.query_records = (scores.query_records || 0) + 2
+  // 将意图类型映射到工具
+  const intentToolMapping = {
+    search: ['search_records'],
+    query: ['query_records'],
+    statistical: ['sql_analysis'],
+    insight: ['insight_analyst'],
+    casual: [],
+    composite: ['query_records', 'sql_analysis']
   }
-
-  // 按分数排序，返回分数 > 0 的工具
-  const sortedTools = Object.entries(scores)
-    .filter(([_, score]) => score > 0)
-    .sort((a, b) => b[1] - a[1])
-    .map(([tool, _]) => tool)
-
-  console.log('[Intent] Query:', query)
-  console.log('[Intent] Scores:', scores)
-  console.log('[Intent] Recommended tools:', sortedTools)
-
-  // 如果没有匹配的工具，返回所有可用工具
-  if (sortedTools.length === 0) {
-    return availableTools
-  }
-
-  return sortedTools
+  
+  const recommendedTools = intentToolMapping[intentContext.primary_intent] || availableTools
+  
+  // 只返回可用的工具
+  return recommendedTools.filter(tool => availableTools.includes(tool))
 }
 
 /**
- * 获取工具的中文描述
- * @param {string} toolName - 工具名称
- * @returns {string} 工具描述
+ * 关键词匹配降级方案（当 LLM 不可用时使用）
+ * @param {string} query - 用户查询文本
+ * @returns {Object} 简化的意图上下文
  */
-export function getToolDescription(toolName) {
-  const descriptions = {
-    search_records: '语义检索 - 适用于情绪、主题等模糊搜索',
-    query_records: '精确查询 - 适用于时间、项目等条件筛选',
-    sql_analysis: '统计分析 - 适用于趋势、对比等数据分析'
+function analyzeIntentByKeywords(query) {
+  const queryLower = query.toLowerCase()
+  
+  // 检测意图类型
+  let primary_intent = 'query' // 默认
+  let complexity = 'medium'
+  let suggested_pipeline = ['query_records']
+  
+  // 闲聊检测
+  const casualKeywords = ['你好', '在吗', '谢谢', '再见', '早上好', '晚安']
+  if (casualKeywords.some(kw => queryLower.includes(kw))) {
+    primary_intent = 'casual'
+    complexity = 'low'
+    suggested_pipeline = []
+  }
+  // 语义搜索
+  else if (['搜索', '找', '检索', '类似', '相关'].some(kw => queryLower.includes(kw))) {
+    primary_intent = 'search'
+    complexity = 'low'
+    suggested_pipeline = ['search_records']
+  }
+  // 深度洞察
+  else if (['为什么', '原因', '关系', '相关性', '影响'].some(kw => queryLower.includes(kw))) {
+    primary_intent = 'insight'
+    complexity = 'high'
+    suggested_pipeline = ['query_records', 'insight_analyst']
+  }
+  // 统计分析
+  else if (['统计', '分析', '总结', '对比', '趋势', '分布'].some(kw => queryLower.includes(kw))) {
+    primary_intent = 'statistical'
+    complexity = 'medium'
+    suggested_pipeline = ['sql_analysis']
   }
   
-  return descriptions[toolName] || toolName
+  return {
+    primary_intent,
+    complexity,
+    temporal_context: {
+      raw: null,
+      resolved_start: null,
+      resolved_end: null,
+      needs_dynamic_resolution: false
+    },
+    extracted_entities: {},
+    filter_hints: {},
+    suggested_pipeline,
+    reasoning: '降级到关键词匹配（LLM 不可用）',
+    maxIterations: COMPLEXITY_MAX_ITERATIONS[complexity] || 3
+  }
 }

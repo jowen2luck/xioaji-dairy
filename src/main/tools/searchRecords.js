@@ -271,8 +271,16 @@ AI 增强能力：
         },
         conditions: {
           type: 'object',
-          description: '可选的后置过滤条件（不建议用于主要筛选，请优先使用 query_records）',
+          description: '可选的后置过滤条件。支持时间范围和情绪过滤。高级用法：在模糊回忆场景下，可先调用 calendar_resolver 获取日期范围，然后传入此参数',
           properties: {
+            dateRange: {
+              type: 'object',
+              description: '日期范围后置过滤（可选）。用于在语义搜索结果中进一步按时间过滤',
+              properties: {
+                start: { type: 'string', description: '开始日期 YYYY-MM-DD' },
+                end: { type: 'string', description: '结束日期 YYYY-MM-DD' }
+              }
+            },
             emotionFocus: {
               type: 'string',
               description: '情绪倾向过滤，可选值: worst（偏向负面情绪）',
@@ -331,6 +339,24 @@ AI 增强能力：
         console.log('[SearchRecordsTool] Applying post-filter conditions:', effectiveCond)
         const candidates = Array.from(candidatesMap.values())
         const filtered = candidates.filter(item => {
+          // 日期范围过滤
+          if (effectiveCond.dateRange) {
+            if (item.time) {
+              const itemDate = new Date(item.time)
+              if (effectiveCond.dateRange.start) {
+                if (itemDate < new Date(effectiveCond.dateRange.start)) return false
+              }
+              if (effectiveCond.dateRange.end) {
+                const endDate = new Date(effectiveCond.dateRange.end)
+                endDate.setHours(23, 59, 59, 999)
+                if (itemDate > endDate) return false
+              }
+            } else {
+              return false
+            }
+          }
+          
+          // 情绪倾向过滤
           if (effectiveCond.emotionFocus === 'worst') {
             return computeEmotionScore(item.ganshou || '') < 0
           }

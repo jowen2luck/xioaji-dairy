@@ -6,6 +6,9 @@
 import { SearchRecordsTool } from './searchRecords.js'
 import { QueryRecordsTool } from './queryRecords.js'
 import { SqlAnalysisTool } from './sqlAnalysis.js'
+import { CalendarResolverTool } from './calendar.js'
+import { MetadataExplorerTool } from './metadata.js'
+import { InsightAnalystTool } from './insight.js'
 
 export class ToolRegistry {
   constructor() {
@@ -14,9 +17,17 @@ export class ToolRegistry {
   }
 
   registerDefaultTools() {
+    // 核心查询工具
     this.register(new SearchRecordsTool())
     this.register(new QueryRecordsTool())
+    
+    // 统计和分析工具
     this.register(new SqlAnalysisTool())
+    this.register(new InsightAnalystTool())
+    
+    // 辅助工具
+    this.register(new CalendarResolverTool())
+    this.register(new MetadataExplorerTool())
     
     console.log('[ToolRegistry] Registered default tools:', Array.from(this.tools.keys()))
   }

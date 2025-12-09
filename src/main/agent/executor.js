@@ -1,6 +1,11 @@
 /**
  * AgentExecutor - 智能助手执行引擎
- * 职责：协调 LLM、工具调用和消息流处理
+ * 职责：协调意图分析、LLM、工具调用和消息流处理
+ * 
+ * 优化要点：
+ * 1. 集成结构化意图分析，提前解析时间语义和实体
+ * 2. 根据意图复杂度动态调整最大迭代次数
+ * 3. 支持短路逻辑，闲聊问候直接返回不调用工具
  */
 
 /**
@@ -45,14 +50,15 @@ export class AgentExecutor {
   }
 
   /**
-   * 主执行方法 - ReAct 模式
+   * 主执行方法 - ReAct 模式（增强版）
    * @param {Object} params - 执行参数
    * @param {Array} params.messages - 消息历史
    * @param {String} params.systemPrompt - 系统提示词
    * @param {String} params.userQuery - 用户查询
    * @param {Array} params.enabledTools - 启用的工具列表
    * @param {Number} params.maxIterations - 最大迭代次数
-   * @returns {Object} { success, content, raw, state }
+   * @param {Object} params.intentContext - （可选）结构化意图上下文
+   * @returns {Object} { success, content, raw, state, intentContext }
    */
   async execute(params) {
     const {
@@ -60,18 +66,36 @@ export class AgentExecutor {
       systemPrompt = '',
       userQuery = '',
       enabledTools = [],
-      maxIterations = 3
+      maxIterations = 3,
+      intentContext = null  // 新增：结构化意图上下文
     } = params
 
     console.log('[AgentExecutor] Starting ReAct execution', {
       userQuery,
       enabledTools,
-      maxIterations
+      maxIterations,
+      hasIntentContext: !!intentContext
     })
 
     // 重置状态
     this.resetState()
-    this.state.maxIterations = maxIterations
+    
+    // 如果有意图上下文，优先使用其推荐的迭代次数
+    const effectiveMaxIterations = intentContext?.maxIterations || maxIterations
+    this.state.maxIterations = effectiveMaxIterations
+    
+    // 短路逻辑：如果是闲聊，直接返回
+    if (intentContext?.primary_intent === 'casual') {
+      console.log('[AgentExecutor] Detected casual intent, skipping tools')
+      return {
+        success: true,
+        content: '你好！我是你的日记助手，有什么可以帮助你的吗？',
+        raw: null,
+        state: this.state,
+        intentContext,
+        duration: 0
+      }
+    }
 
     const startTime = Date.now()
 
@@ -119,6 +143,7 @@ export class AgentExecutor {
             content: reasoning,
             raw: response,
             state: this.state,
+            intentContext,  // 返回意图上下文
             duration: Date.now() - startTime
           }
         }
@@ -179,6 +204,7 @@ export class AgentExecutor {
         content: finalContent,
         raw: finalResponse,
         state: this.state,
+        intentContext,  // 返回意图上下文
         duration: Date.now() - startTime,
         maxIterationsReached: true
       }
@@ -195,6 +221,7 @@ export class AgentExecutor {
         success: false,
         error: error.message,
         state: this.state,
+        intentContext,  // 即使错误也返回意图上下文
         duration: Date.now() - startTime
       }
     }
@@ -339,11 +366,24 @@ export class AgentExecutor {
   formatMessages(messages, systemPrompt) {
     const formatted = []
 
-    // 添加系统提示词（如果提供且未包含在 messages 中）
-    if (systemPrompt && !messages.some(m => m.role === 'system')) {
+    // 【核心改进】Agent 执行的强制性指令
+    // 这些指令确保 Agent 遵守正确的时间处理流程
+    const coreInstruction = `
+你是一个智能日记助手。
+
+【核心原则】
+1. **时间严谨性**：如果用户提到相对时间（如“上周”、“昨天”、“最近”），**必须第一步调用 calendar_resolver 工具**获取精确的 ISO 日期范围。严禁自己估算日期。
+2. **循序渐进**：不要尝试在一个步骤中完成所有操作。先获取时间/元数据，拿到结果后再调用查询工具。
+3. **工具依赖**：不要编造数据，所有分析必须基于 sql_analysis 或 query_records 的返回结果。
+`
+
+    // 添加系统提示词
+    const effectiveSystemPrompt = (systemPrompt || '') + coreInstruction
+
+    if (!messages.some(m => m.role === 'system')) {
       formatted.push({
         role: 'system',
-        content: systemPrompt
+        content: effectiveSystemPrompt
       })
     }
 

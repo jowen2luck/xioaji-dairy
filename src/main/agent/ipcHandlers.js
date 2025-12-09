@@ -1,5 +1,5 @@
 /**
- * IPC 处理器 - LangChain 集成版本
+ * IPC 处理器 - LangChain 集成版本（增强意图分析）
  * 将 IPC 事件映射到代理执行
  */
 
@@ -7,7 +7,7 @@ import { ipcMain } from 'electron'
 import { initializeModel } from '../llm/models.js'
 import { getToolRegistry } from '../tools/registry.js'
 import { AgentExecutor } from './executor.js'
-import { analyzeIntent } from '../intent/analyzer.js'
+import { analyzeIntent, analyzeIntentWithLLM } from '../intent/analyzer.js'
 
 /**
  * 注册所有 IPC 处理器
@@ -64,11 +64,55 @@ export function registerIPCHandlers(config = {}) {
       // 确定启用的工具
       const enabledToolNames = tools ? tools.map(t => t.function?.name || t.name).filter(Boolean) : []
 
-      // 意图分析
-      const intentTools = userQuery ? analyzeIntent(userQuery, enabledToolNames) : []
+      // 结构化意图分析（使用 LLM）
+      let intentContext = null
+      let intentTools = []
+      
+      if (userQuery) {
+        try {
+          // 尝试使用 LLM 进行结构化意图分析
+          // 【改进】如果配置中指定了 intentModel，创建独立的意图分析 LLM
+          let intentLLM = llm  // 默认使用主 LLM
+          if (userConfig?.intentModel && userConfig.intentModel !== model) {
+            console.log('[IPC:chat] Creating separate intent analyzer LLM:', userConfig.intentModel)
+            intentLLM = initializeModel({
+              selectedBaseURL: baseURL,
+              selectedModel: userConfig.intentModel,
+              temperature: userConfig?.temperature ?? 0.7,
+              top_p: userConfig?.top_p ?? 0.9,
+            })
+          }
+          
+          intentContext = await analyzeIntentWithLLM(userQuery, intentLLM)
+          
+          if (intentContext && intentContext.suggested_pipeline) {
+            // 使用意图分析推荐的工具链
+            intentTools = intentContext.suggested_pipeline.filter(tool => 
+              enabledToolNames.includes(tool)
+            )
+            
+            // 【核心改进】强制注入基础辅助工具，防止意图分析器漏判
+            // 这些工具对于日记查询至关重要，应该始终可用
+            const essentialTools = ['calendar_resolver', 'metadata_explorer']
+            essentialTools.forEach(toolName => {
+              if (enabledToolNames.includes(toolName) && !intentTools.includes(toolName)) {
+                console.log(`[IPC:chat] Injecting essential tool: ${toolName}`)
+                intentTools.push(toolName)
+              }
+            })
+            
+            console.log('[IPC:chat] Intent context:', intentContext)
+            console.log('[IPC:chat] Final tool list (with essential tools):', intentTools)
+          }
+        } catch (error) {
+          console.error('[IPC:chat] Intent analysis failed, using fallback:', error)
+          // 降级到旧版关键词匹配
+          intentTools = analyzeIntent(userQuery, enabledToolNames)
+        }
+      }
 
       console.log('[IPC:chat] Enabled tools:', enabledToolNames)
-      console.log('[IPC:chat] Intended tools:', intentTools)
+      console.log('[IPC:chat] Intent tools:', intentTools)
 
       // 如果禁用工具，直接调用 LLM
       if (disableTools === true) {
@@ -100,13 +144,14 @@ export function registerIPCHandlers(config = {}) {
         top_p: userConfig?.top_p ?? 0.9,
       })
 
-      // 执行代理
+      // 执行代理（传入意图上下文）
       const result = await executor.execute({
         messages, // 直接使用前端发送的消息（已包含 system prompt）
         systemPrompt: '', // 不重复添加 system prompt
         userQuery,
         enabledTools: intentTools.length > 0 ? intentTools : enabledToolNames,
-        maxIterations: 3,
+        maxIterations: intentContext?.maxIterations || 3,  // 使用意图推荐的迭代次数
+        intentContext  // 传入结构化意图上下文
       })
 
       if (!result.success) {
@@ -125,6 +170,7 @@ export function registerIPCHandlers(config = {}) {
           raw: result.raw || { choices: [{ message: { content: result.content } }] },
           toolResults: result.state.toolResults || [],
           intentTools,
+          intentContext: result.intentContext,  // 返回结构化意图上下文
           state: result.state,  // 包含完整的 ReAct 状态
           debug: {
             iterations: result.state.iteration,

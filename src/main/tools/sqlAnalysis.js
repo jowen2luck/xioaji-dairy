@@ -1,14 +1,9 @@
 /**
- * SQL 分析工具 (Tool) - 增强版
- * 新增功能：支持 AI 元数据的多维度统计分析
+ * SQL 分析工具 (Tool) - 基础统计专用
+ * 职责：执行客观数据的聚合统计
+ * 处理"有多少"、"多久"、"什么时候"的问题
  * 
- * 新增分析类型：
- * - mood_distribution: 情绪标签分布统计
- * - energy_trend: 能量值时间趋势
- * - people_network: 人际关系网络
- * - content_type_ratio: 内容体裁占比
- * - wisdom_archive: 智慧资产聚合
- * - emotion_energy_correlation: 情绪与能量值关联分析
+ * 注意：深度洞察分析（相关性、归因、心理分析）请使用 insight_analyst 工具
  */
 
 import { Tool, ToolResult } from './base.js'
@@ -18,7 +13,7 @@ export class SqlAnalysisTool extends Tool {
   constructor() {
     super()
     this.name = 'sql_analysis'
-    this.description = `执行多维度统计分析（支持 AI 元数据分析）:
+    this.description = `执行基础统计分析（客观数据聚合）:
 基础统计：
 - summary: 总体统计摘要(记录数、项目数、总时长等)
 - by_project: 按项目分组统计(默认Top10)
@@ -27,23 +22,16 @@ export class SqlAnalysisTool extends Tool {
 - mood_trend: 情绪趋势(按月)
 - top_projects: 高频项目排行(默认Top5)
 
-AI 增强统计：
+AI 元数据统计：
 - mood_distribution: 情绪标签分布统计（AI提取）
 - energy_trend: 能量值时间趋势分析（按周或月）
-- people_network: 人际关系网络（涉及人物频次）
 - content_type_ratio: 内容体裁占比分析
-- wisdom_archive: 智慧资产聚合（提取所有金句）
-- emotion_energy_correlation: 情绪与能量值关联分析
-
-数据分析页专用：
 - life_composition: 生活重心统计（按内容类型）
-- context_cloud: 物与境词云数据（地点和物品）
-- activity_calendar: 活动日历数据（按日期统计）
-- biorhythm_stats: 生物节律统计（能量和专注度）
-- psych_distribution: 心理需求分布（马斯洛层次）
-- temporal_stats: 时空取向统计（过去/现在/未来）
 
-注意:所有统计基于已加载的ETL清洗数据,包含_meta_和_ai_meta字段`
+注意:
+- 此工具专注于基础统计（计数、求和、平均值）
+- 深度洞察分析（相关性、归因、心理分析）请使用 insight_analyst 工具
+- 所有统计基于已加载的ETL清洗数据,包含_meta_和_ai_meta字段`
     this.schema = {
       type: 'object',
       properties: {
@@ -58,20 +46,11 @@ AI 增强统计：
             'weekday_weekend',
             'mood_trend',
             'top_projects',
-            // AI 增强统计
+            // AI 元数据统计
             'mood_distribution',
             'energy_trend',
-            'people_network',
             'content_type_ratio',
-            'wisdom_archive',
-            'emotion_energy_correlation',
-            // 数据分析页专用
-            'life_composition',
-            'context_cloud',
-            'activity_calendar',
-            'biorhythm_stats',
-            'psych_distribution',
-            'temporal_stats'
+            'life_composition'
           ],
         },
         params: {
@@ -97,8 +76,7 @@ AI 增强统计：
       // 验证 analysisType
       const validTypes = [
         'summary', 'by_project', 'by_time', 'weekday_weekend', 'mood_trend', 'top_projects',
-        'mood_distribution', 'energy_trend', 'people_network', 'content_type_ratio', 'wisdom_archive', 'emotion_energy_correlation',
-        'life_composition', 'context_cloud', 'activity_calendar', 'biorhythm_stats', 'psych_distribution', 'temporal_stats'
+        'mood_distribution', 'energy_trend', 'content_type_ratio', 'life_composition'
       ]
       if (!validTypes.includes(analysisType)) {
         return new ToolResult(this.name, {
@@ -149,7 +127,7 @@ AI 增强统计：
           result = sqlService.getTopProjects(data, params.limit || 5)
           break
 
-        // ==================== AI 增强统计 ====================
+        // ==================== AI 元数据统计 ====================
         case 'mood_distribution':
           result = sqlService.analyzeMoodDistribution(data)
           break
@@ -159,45 +137,12 @@ AI 增强统计：
           result = sqlService.analyzeEnergyTrend(data, groupBy)
           break
 
-        case 'people_network':
-          result = sqlService.analyzePeopleNetwork(data)
-          break
-
         case 'content_type_ratio':
           result = sqlService.analyzeContentTypeRatio(data)
           break
 
-        case 'wisdom_archive':
-          result = sqlService.getWisdomArchive(data, params.limit || 50)
-          break
-
-        case 'emotion_energy_correlation':
-          result = sqlService.analyzeEmotionEnergyCorrelation(data)
-          break
-
-        // ==================== 数据分析页专用 ====================
         case 'life_composition':
           result = sqlService.analyzeLifeComposition(data)
-          break
-
-        case 'context_cloud':
-          result = sqlService.analyzeContextCloud(data, params.limit || 20)
-          break
-
-        case 'activity_calendar':
-          result = sqlService.analyzeActivityCalendar(data, params.dateRange || {})
-          break
-
-        case 'biorhythm_stats':
-          result = sqlService.analyzeBiorhythmStats(data, params.groupBy || 'day')
-          break
-
-        case 'psych_distribution':
-          result = sqlService.analyzePsychDistribution(data)
-          break
-
-        case 'temporal_stats':
-          result = sqlService.analyzeTemporalStats(data)
           break
 
         default:
@@ -209,8 +154,7 @@ AI 增强统计：
       // 统计 AI 增强数据情况
       const aiEnhancedCount = data.filter(item => item._ai_meta).length
       const isAIAnalysis = [
-        'mood_distribution', 'energy_trend', 'people_network', 'content_type_ratio', 'wisdom_archive', 'emotion_energy_correlation',
-        'life_composition', 'context_cloud', 'activity_calendar', 'biorhythm_stats', 'psych_distribution', 'temporal_stats'
+        'mood_distribution', 'energy_trend', 'content_type_ratio', 'life_composition'
       ].includes(analysisType)
 
       return new ToolResult(this.name, {

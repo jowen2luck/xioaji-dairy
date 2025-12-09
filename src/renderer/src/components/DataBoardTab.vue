@@ -366,8 +366,7 @@ const startETLEnhancement = async () => {
     
     const config = loadConfig()
     const etlConfig = {
-      ...config.etl,
-      systemPrompt: config.prompts.etlSystem
+      ...config.etl
     }
     
     if (!etlConfig.enabled) {
