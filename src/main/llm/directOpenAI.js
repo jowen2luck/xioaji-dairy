@@ -3,7 +3,6 @@
  */
 
 import https from 'https'
-import http from 'http'
 
 // 定义不同 baseURL 对应的 API Key 环境变量映射
 const API_KEY_MAP = {
@@ -40,29 +39,25 @@ function getAPIKeyForBaseURL(baseURL) {
  * @param {number} config.top_p - Top P 参数（可选）
  * @returns {Promise<object>} - API 响应
  */
-export async function callOpenAIAPI(config) {
+export async function callOpenAIAPI(options) {
   const {
-    baseURL,
-    apiKey = getAPIKeyForBaseURL(baseURL),
+    baseURL: baseURLOrigin,
     model,
     messages,
-    tools,
+    tools = [],
     temperature = 0.7,
     top_p = 0.9,
-  } = config
-  
+    apiKey: providedApiKey,
+    maxRetries = 2  // 添加重试参数
+  } = options
+
+  // 获取 API 密钥
+  const apiKey = providedApiKey || getAPIKeyForBaseURL(baseURLOrigin)
   if (!apiKey) {
-    throw new Error(`Missing API key for baseURL: ${baseURL}`)
+    throw new Error('Missing API key')
   }
 
-  // 确保 baseURL 是字符串
-  const baseURLOrigin = typeof baseURL === 'string' ? baseURL : (baseURL?.href || baseURL?.origin || '')
-  
-  if (!baseURLOrigin) {
-    throw new Error('Invalid baseURL: must be a string or URL object')
-  }
-
-  // 构建完整的 URL
+  // 解析和验证 baseURL
   let url
   try {
     // 根据 baseURL 的不同格式构建正确的 URL
@@ -100,53 +95,79 @@ export async function callOpenAIAPI(config) {
 
   console.log('[DirectOpenAI] Calling API', { url: url.toString(), model, messagesCount: messages.length, toolsCount: tools?.length || 0 })
 
-  return new Promise((resolve, reject) => {
-    const requestOptions = {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      timeout: 30000, // 30秒超时
-    }
+  // 内部函数：执行单次请求
+  const executeRequest = () => {
+    return new Promise((resolve, reject) => {
+      const requestOptions = {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        timeout: 60000, // 增加到60秒超时
+      }
 
-    const req = protocol.request(url, requestOptions, (res) => {
-      let data = ''
+      const req = protocol.request(url, requestOptions, (res) => {
+        let data = ''
 
-      res.on('data', (chunk) => {
-        data += chunk
-      })
+        res.on('data', (chunk) => {
+          data += chunk
+        })
 
-      res.on('end', () => {
-        try {
-          if (res.statusCode === 200) {
-            const response = JSON.parse(data)
-            console.log('[DirectOpenAI] Response:', JSON.stringify(response, null, 2))
-            resolve({
-              content: response.choices?.[0]?.message?.content || '',
-              choices: response.choices,
-              tool_calls: response.choices?.[0]?.message?.tool_calls,
-              raw: response,
-            })
-          } else {
-            reject(new Error(`API error: ${res.statusCode} ${data}`))
+        res.on('end', () => {
+          try {
+            if (res.statusCode === 200) {
+              const response = JSON.parse(data)
+              console.log('[DirectOpenAI] Response:', JSON.stringify(response, null, 2))
+              resolve({
+                content: response.choices?.[0]?.message?.content || '',
+                choices: response.choices,
+                tool_calls: response.choices?.[0]?.message?.tool_calls,
+                raw: response,
+              })
+            } else {
+              reject(new Error(`API error: ${res.statusCode} ${data}`))
+            }
+          } catch (e) {
+            reject(new Error(`Failed to parse response: ${e.message}`))
           }
-        } catch (e) {
-          reject(new Error(`Failed to parse response: ${e.message}`))
-        }
+        })
       })
-    })
 
-    req.on('timeout', () => {
-      req.destroy()
-      reject(new Error('API request timeout'))
-    })
+      req.on('timeout', () => {
+        req.destroy()
+        reject(new Error('API request timeout'))
+      })
 
-    req.on('error', (error) => {
-      reject(new Error(`Network error: ${error.message}`))
-    })
+      req.on('error', (error) => {
+        reject(new Error(`Network error: ${error.message}`))
+      })
 
-    req.write(JSON.stringify(payload))
-    req.end()
-  })
+      req.write(JSON.stringify(payload))
+      req.end()
+    })
+  }
+
+  // 带重试机制的执行逻辑
+  let lastError;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`[DirectOpenAI] Attempt ${attempt + 1}/${maxRetries + 1}`)
+      const result = await executeRequest();
+      return result;
+    } catch (error) {
+      lastError = error;
+      console.log(`[DirectOpenAI] Attempt ${attempt + 1} failed:`, error.message);
+      
+      // 如果是最后一次尝试，或者错误不可重试，则抛出错误
+      if (attempt === maxRetries) {
+        throw new Error(`API request failed after ${maxRetries + 1} attempts: ${error.message}`);
+      }
+      
+      // 等待一段时间再重试
+      await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
+    }
+  }
+  
+  throw new Error(`API request failed after ${maxRetries + 1} attempts: ${lastError.message}`);
 }

@@ -25,6 +25,7 @@ export class AgentExecutor {
       baseURL: config.baseURL || '',
       apiKey: config.apiKey || '',
       model: config.model || 'qwen-plus',
+      intentModel: config.intentModel || config.model || 'qwen-plus', // 意图识别模型
       temperature: config.temperature ?? 0.7,
       top_p: config.top_p ?? 0.9,
       maxIterations: config.maxIterations || 3,

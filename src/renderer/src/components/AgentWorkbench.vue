@@ -5,13 +5,18 @@
       <div class="chat-section">
         <n-card class="panel">
           <div class="chat-content">
-            <div class="messages" ref="messagesRef">
+            <div class="messages" ref="messagesRef" :class="{ 'visible': isLayoutReady }">
               <div class="bubble agent">
-                <div class="bubble-content" v-html="renderMarkdown('请开始对话或调用工具。点击右上角设置按钮进行配置。')"></div>
+                <div class="bubble-content">
+                  <MarkdownRenderer content="请开始对话或调用工具。点击右上角设置按钮进行配置。" />
+                </div>
                 <div class="time">{{ formatTime(welcomeTime) }}</div>
               </div>
               <div v-for="(m, i) in messages" :key="i" :class="['bubble', m.sender]">
-                <div class="bubble-content" v-html="m.sender === 'agent' ? renderMarkdown(m.content) : m.content" />
+                <div class="bubble-content">
+                  <MarkdownRenderer v-if="m.sender === 'agent'" :content="m.content" />
+                  <div v-else v-html="m.content"></div>
+                </div>
                 <div class="bubble-footer">
                   <span class="time">{{ formatTime(m.time) }}</span>
                   <!-- 思维记录切换按钮 -->
@@ -54,9 +59,9 @@
 
 <script setup>
 import { ref, onMounted, nextTick, watch, computed, h } from 'vue'
-import MarkdownIt from 'markdown-it'
 import { loadConfig, saveConfig, DEFAULT_CONFIG } from '@renderer/config/assistant'
 import ReActPanel from './ReActPanel.vue'
+import MarkdownRenderer from './MarkdownRenderer.vue'
 
 // 思维图标
 const BrainIcon = { render: () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', innerHTML: '<path fill="currentColor" d="M12 2a9 9 0 0 0-9 9c0 4.17 2.84 7.67 6.69 8.69L12 22l2.31-2.31C18.16 18.67 21 15.17 21 11a9 9 0 0 0-9-9m0 2c1.66 0 3 1.34 3 3s-1.34 3-3 3s-3-1.34-3-3s1.34-3 3-3"/>' }) }
@@ -73,12 +78,16 @@ const reactSteps = ref([])
 // 历史对话的思维记录缓存（每次对话的思维记录）
 const conversationReacts = ref({})
 
-// 初始化MarkdownIt
-const md = new MarkdownIt({
-  html: true,
-  linkify: true,
-  typographer: true
-})
+// 布局就绪状态 - 用于控制透明度，实现无闪烁滚动
+const isLayoutReady = ref(false)
+
+// 自动滚动到底部
+const scrollToBottom = async (smooth = false) => {
+  await nextTick()
+  if (messagesRef.value) {
+    messagesRef.value.scrollTop = messagesRef.value.scrollHeight
+  }
+}
 
 // 从全局设置加载配置
 const c0 = loadConfig()
@@ -161,6 +170,21 @@ onMounted(async () => {
   } catch (e) {
     console.error('加载思维记录失败', e)
   }
+  
+  // 【无闪烁滚动方案】
+  // 1. 等待 DOM 渲染完成
+  await nextTick()
+  
+  // 2. 瞬间滚动到底部（无动画，用户看不到）
+  if (messagesRef.value) {
+    messagesRef.value.scrollTop = messagesRef.value.scrollHeight
+  }
+  
+  // 3. 使用 requestAnimationFrame 确保在下一帧渲染时才显示内容
+  // 避免用户看到滚动跳跃过程
+  requestAnimationFrame(() => {
+    isLayoutReady.value = true
+  })
 })
 
 const formatTime = (t) => {
@@ -187,6 +211,7 @@ async function send() {
   
   messages.value.push({ content: text, sender: 'user', time: new Date().toISOString(), reactIndex: 0, conversationId })
   input.value = ''
+  await scrollToBottom()
   
   // 清空并初始化思维链
   clearReActSteps()
@@ -199,21 +224,38 @@ async function send() {
     timestamp: new Date().toISOString()
   })
   
-  // 推送：加载中
+  // 推送:加载中(思考状态)
   const loadingStepIndex = reactSteps.value.length
   addReActStep({ 
     type: 'loading', 
     action: 'loading',
-    detail: '正在分析并调用工具...',
+    detail: '正在思考',
     timestamp: new Date().toISOString()
   })
   
   const nowStr = new Date().toLocaleString('zh-CN', { hour12: false })
   const sysinfo = `\n【系统信息】当前时间：${nowStr}；时区：UTC+8；语言：中文。`
+  
+  // 【改进】构建完整的消息历史，包括之前的对话
   const messagesPayload = [
-    { role: 'system', content: `${config.prompts.chatSystem}${sysinfo}` },
-    { role: 'user', content: text }
+    { role: 'system', content: `${config.prompts.chatSystem}${sysinfo}` }
   ]
+  
+  // 添加排除初始欢迎信息的历史消息
+  messages.value.forEach(msg => {
+    messagesPayload.push({
+      role: msg.sender === 'user' ? 'user' : 'assistant',
+      content: msg.content
+    })
+  })
+  
+  // 添加当前消息
+  messagesPayload.push({
+    role: 'user',
+    content: text
+  })
+  
+  console.log('[AgentWorkbench] Sending message history with', messagesPayload.length, 'messages')
 
   const tools = enabledTools.value.map(name => ({ type: 'function', function: { name } }))
   console.log('[send] enabledTools', enabledTools.value)
@@ -234,6 +276,8 @@ async function send() {
       intentModel: config.intentModel
     }
     console.log('[assistant:chat] request', requestConfig)
+    
+    // 【改进】模拟流式步骤推送 - 启动轮询检查后端日志(简化版:直接等待结果)
     result = await window.assistant?.chat?.(requestConfig)
     console.log('[assistant:chat] result', result)
   } catch (e) {
@@ -248,6 +292,7 @@ async function send() {
     })
     const errDetail = escapeHTML(JSON.stringify({ name: e?.name, message: e?.message }, null, 2))
     messages.value.push({ content: `<pre>${errDetail}</pre>`, sender: 'agent', time: new Date().toISOString() })
+    await scrollToBottom()
     sending.value = false
     return
   }
@@ -260,14 +305,20 @@ async function send() {
     const stateSteps = result.data?.state?.steps || []
     console.log('[ReAct] Backend steps:', stateSteps)
     
-    // 推送每个 ReAct 迭代步骤
-    stateSteps.forEach(step => {
+    // 【改进】逐步推送 ReAct 迭代步骤,模拟实时显示
+    for (let i = 0; i < stateSteps.length; i++) {
+      const step = stateSteps[i]
       addReActStep({
         ...step,
-        type: step.action, // 使用 action 作为 type
+        type: step.action,
         time: new Date(step.timestamp || Date.now())
       })
-    })
+      
+      // 每个步骤之间添加短暂延迟,增强实时感
+      if (i < stateSteps.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 150))
+      }
+    }
     
     // 获取最终答案
     const finalAnswer = result.data?.content
@@ -283,20 +334,20 @@ async function send() {
         timestamp: new Date().toISOString()
       })
       
-      // 流式输出最终答案（关联思维记录索引）
+      // 【改进】流式输出最终答案(关联思维记录索引)
       const streamIndex = messages.value.length
       const finalReactIndex = reactSteps.value.length - 1 // 关联最后一个思维步骤
       messages.value.push({ content: '', sender: 'agent', time: new Date().toISOString(), isStreaming: true, reactIndex: finalReactIndex, conversationId })
       
-      await streamMessageContent(streamIndex, finalAnswer)
+      // 增加流式打字速度,提升体验
+      await streamMessageContent(streamIndex, finalAnswer, 40, 50) // 更快的速度
       messages.value[streamIndex].isStreaming = false
       
       // 保存当前对话的思维记录
       saveCurrentReacts(conversationId)
       
       try { localStorage.setItem('assistant-conversation', JSON.stringify(messages.value)) } catch {}
-      await nextTick()
-      if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight
+      await scrollToBottom()
       sending.value = false
       return
     }
@@ -319,6 +370,7 @@ async function send() {
         timestamp: new Date().toISOString()
       })
       messages.value.push({ content: msg, sender: 'agent', time: new Date().toISOString() })
+      await scrollToBottom()
       sending.value = false
       return
     }
@@ -346,8 +398,9 @@ async function send() {
         disableTools: true
       })
     } catch (e) {
-      const msg = `生成阶段失败：${e?.message || '未知错误'}`
+    const msg = `生成阶段失败：${e?.message || '未知错误'}`
       messages.value[streamIndex] = { content: msg, sender: 'agent', time: new Date().toISOString() }
+      await scrollToBottom()
       sending.value = false
       return
     }
@@ -356,15 +409,15 @@ async function send() {
     if (!final) {
       const msg = '模型未生成最终回答'
       messages.value[streamIndex] = { content: msg, sender: 'agent', time: new Date().toISOString() }
+      await scrollToBottom()
       sending.value = false
       return
     }
     
-    await streamMessageContent(streamIndex, final)
+    await streamMessageContent(streamIndex, final, 40, 50)
     messages.value[streamIndex].isStreaming = false
     try { localStorage.setItem('assistant-conversation', JSON.stringify(messages.value)) } catch {}
-    await nextTick()
-    if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight
+    await scrollToBottom()
   } else {
     const errDetail = escapeHTML(JSON.stringify(result || {}, null, 2))
     addReActStep({ 
@@ -375,6 +428,7 @@ async function send() {
     })
     messages.value.push({ content: `<pre>${errDetail}</pre>`, sender: 'agent', time: new Date().toISOString() })
     try { localStorage.setItem('assistant-conversation', JSON.stringify(messages.value)) } catch {}
+    await scrollToBottom()
   }
   
   sending.value = false
@@ -403,11 +457,7 @@ async function invoke(name) {
 
 function escapeHTML(s) { return s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])) }
 
-// 渲染Markdown内容的函数
-function renderMarkdown(content) {
-  if (!content) return ''
-  return md.render(content)
-}
+
 
 function onEnter() { if (!sending.value) send() }
 
@@ -416,16 +466,22 @@ function formatThoughts(thoughts) {
   return String(thoughts).replace(/\n/g, '<br>')
 }
 
-async function streamMessageContent(index, text) {
+/**
+ * 流式渲染消息内容
+ * @param {number} index - 消息索引
+ * @param {string} text - 完整文本
+ * @param {number} chunkSize - 每次渲染的字符数
+ * @param {number} interval - 渲染间隔(毫秒)
+ */
+async function streamMessageContent(index, text, chunkSize = 80, interval = 60) {
   return new Promise((resolve) => {
-    const chunkSize = 80
     let cursor = 0
     const timer = setInterval(async () => {
       cursor = Math.min(text.length, cursor + chunkSize)
       messages.value[index].content = text.slice(0, cursor)
-      await nextTick(); if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight
-      if (cursor >= text.length) { clearInterval(timer); sending.value = false; resolve(null) }
-    }, 60)
+      await scrollToBottom()
+      if (cursor >= text.length) { clearInterval(timer); resolve(null) }
+    }, interval)
   })
 }
 </script>
@@ -473,6 +529,7 @@ async function streamMessageContent(index, text) {
 :deep(.n-card__content) {
   flex: 1;
   min-height: 0;
+  padding: 4px;
   display: flex;
   flex-direction: column;
   overflow: auto;
@@ -494,12 +551,20 @@ async function streamMessageContent(index, text) {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 12px;
+  padding: 6px;
+  /* 无闪烁滚动方案 - 默认隐藏 */
+  opacity: 0;
+  transition: opacity 0.2s ease-in;
+}
+
+.messages.visible {
+  /* 布局就绪后显示 */
+  opacity: 1;
 }
 
 /* --- 4. 气泡 --- */
 .bubble {
-  max-width: 72%;
+  max-width: 80%;
   margin: 10px 0;
   padding: 10px 14px;
   border-radius: 14px;

@@ -1,267 +1,187 @@
 <template>
-  <div class="markdown-content" v-html="renderedHtml"></div>
+  <div class="markdown-body" v-html="renderedHtml"></div>
 </template>
 
 <script setup>
 import { computed } from 'vue'
 import { marked } from 'marked'
-import hljs from 'highlight.js'
 import DOMPurify from 'dompurify'
 
-// 配置 marked 选项
+// 配置 marked (保持简单，专注于文本解析)
 marked.setOptions({
-  breaks: true,
+  breaks: true, // 开启换行符转<br>，这对AI回答很重要
   gfm: true,
-  pedantic: false,
-  mangle: false,
-})
-
-// 设置代码高亮
-marked.setOptions({
-  highlight: (code, lang) => {
-    if (lang && hljs.getLanguage(lang)) {
-      try {
-        return hljs.highlight(code, { language: lang }).value
-      } catch (e) {
-        return code
-      }
-    }
-    return code
-  }
 })
 
 const props = defineProps({
   content: {
     type: String,
-    required: true
+    required: true,
+    default: ''
   }
 })
 
-// 解析并渲染 Markdown
 const renderedHtml = computed(() => {
   if (!props.content) return ''
   try {
-    // 使用 marked 解析 Markdown
-    let html = marked.parse(props.content)
-    // 使用 DOMPurify 清理 HTML 防止 XSS
-    html = DOMPurify.sanitize(html)
-    return html
+    const raw = marked.parse(props.content)
+    return DOMPurify.sanitize(raw)
   } catch (error) {
-    console.error('Markdown 解析错误:', error)
-    // 如果解析失败，返回文本内容
-    return `<p>${DOMPurify.sanitize(props.content)}</p>`
+    return `<p>解析出错</p>`
   }
 })
 </script>
 
 <style scoped>
-/* Markdown 内容样式 */
-.markdown-content {
-  color: var(--text-main, #334155);
-  font-size: 14px;
-  line-height: 1.8;
-  word-break: break-word;
+/* ============================================
+   核心阅读体验变量 (推荐放在全局 CSS 中，这里演示用)
+   ============================================ */
+.markdown-body {
+  /* 字体与排版 */
+  --md-font-size: 16px;       /* 正文从 14px 提升到 16px，提升易读性 */
+  --md-line-height: 1.8;      /* 1.8 倍行高，让文字更透气 */
+  
+  /* 颜色 (适配深色模式，你可以根据你的项目变量替换) */
+  --md-text-primary: #e2e8f0; /* 主文字色 (截图看你是深色底) */
+  --md-text-secondary: #94a3b8; /* 次要文字色 */
+  --md-accent: #818cf8;       /* 强调色 (链接、符号) */
+  --md-bg-block: rgba(255, 255, 255, 0.05); /* 引用块/代码块背景 */
+  --md-border: rgba(255, 255, 255, 0.1);
 }
 
-/* 段落 */
-.markdown-content :deep(p) {
-  margin: 0 0 8px 0;
-  color: inherit;
+/* 容器基础样式 */
+.markdown-body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: var(--md-font-size);
+  line-height: var(--md-line-height);
+  color: var(--md-text-primary);
+  text-align: left;
+  word-wrap: break-word;
 }
 
-.markdown-content :deep(p:last-child) {
+/* ============================================
+   1. 解决“拥挤”感：段落与间距
+   ============================================ */
+/* 每一个块级元素都有充足的底部间距 */
+.markdown-body :deep(p),
+.markdown-body :deep(ul),
+.markdown-body :deep(ol),
+.markdown-body :deep(blockquote),
+.markdown-body :deep(pre),
+.markdown-body :deep(table) {
+  margin-bottom: 1.5em; /* 约 24px 的间距 */
+}
+
+/* 最后一个元素去除间距 */
+.markdown-body :deep(*:last-child) {
   margin-bottom: 0;
 }
 
-/* 标题 */
-.markdown-content :deep(h1),
-.markdown-content :deep(h2),
-.markdown-content :deep(h3),
-.markdown-content :deep(h4),
-.markdown-content :deep(h5),
-.markdown-content :deep(h6) {
-  margin: 12px 0 8px 0;
+/* ============================================
+   2. 增强标题层级 (让结构更清晰)
+   ============================================ */
+.markdown-body :deep(h1),
+.markdown-body :deep(h2),
+.markdown-body :deep(h3),
+.markdown-body :deep(h4) {
+  margin-top: 2em; /* 标题上方留出大片空白，区分章节 */
+  margin-bottom: 0.8em;
   font-weight: 600;
-  color: var(--text-main, #334155);
-  line-height: 1.4;
+  line-height: 1.3;
+  color: #fff; /* 标题更亮 */
 }
 
-.markdown-content :deep(h1) {
-  font-size: 18px;
+.markdown-body :deep(h1) { font-size: 1.75em; border-bottom: 1px solid var(--md-border); padding-bottom: 0.3em; }
+.markdown-body :deep(h2) { font-size: 1.5em; }
+.markdown-body :deep(h3) { font-size: 1.25em; color: var(--md-text-primary); }
+
+/* 紧接在标题后的段落稍微拉近一点，增强关联感 */
+.markdown-body :deep(h1) + p,
+.markdown-body :deep(h2) + p,
+.markdown-body :deep(h3) + p {
+  margin-top: -0.4em;
 }
 
-.markdown-content :deep(h2) {
-  font-size: 16px;
+/* ============================================
+   3. 列表优化 (针对你截图中的大量列表)
+   ============================================ */
+.markdown-body :deep(ul),
+.markdown-body :deep(ol) {
+  padding-left: 1.5em; /* 足够的左侧缩进 */
 }
 
-.markdown-content :deep(h3) {
-  font-size: 15px;
+/* 列表项之间增加间距，这是解决拥挤感的关键！ */
+.markdown-body :deep(li) {
+  margin-bottom: 0.5em; /* 列表项之间有 8px 左右空隙 */
+  position: relative;
 }
 
-.markdown-content :deep(h4),
-.markdown-content :deep(h5),
-.markdown-content :deep(h6) {
-  font-size: 14px;
+/* 列表内的段落，消除多余边距 */
+.markdown-body :deep(li > p) {
+  margin-bottom: 0.5em;
 }
 
-/* 列表 */
-.markdown-content :deep(ul),
-.markdown-content :deep(ol) {
-  margin: 8px 0;
-  padding-left: 24px;
+/* 嵌套列表的处理 */
+.markdown-body :deep(ul ul),
+.markdown-body :deep(ul ol),
+.markdown-body :deep(ol ul),
+.markdown-body :deep(ol ol) {
+  margin-top: 0.5em;
+  margin-bottom: 0;
 }
 
-.markdown-content :deep(li) {
-  margin: 4px 0;
-  color: inherit;
+/* 自定义列表标记颜色 (可选，增加精致感) */
+.markdown-body :deep(ul li::marker) {
+  color: var(--md-text-secondary);
 }
 
-.markdown-content :deep(ul li::marker) {
-  color: var(--accent-color, #6366f1);
+/* ============================================
+   4. 重点信息强调
+   ============================================ */
+.markdown-body :deep(strong) {
+  font-weight: 700;
+  color: #fff; /* 加粗文字用纯白，在深色模式下更醒目 */
 }
 
-/* 代码块 */
-.markdown-content :deep(pre) {
-  background: rgba(99, 102, 241, 0.08);
-  border: 1px solid rgba(99, 102, 241, 0.2);
-  border-radius: 6px;
-  padding: 12px;
-  margin: 8px 0;
-  overflow-x: auto;
-  font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-[data-theme="dark"] .markdown-content :deep(pre) {
-  background: #1e293b;
-  border-color: #475569;
-}
-
-.markdown-content :deep(code) {
-  font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
-  font-size: 12px;
-}
-
-/* 行内代码 */
-.markdown-content :deep(p code),
-.markdown-content :deep(li code) {
-  background: rgba(99, 102, 241, 0.1);
-  border-radius: 3px;
-  padding: 2px 6px;
-  color: #6366f1;
-}
-
-[data-theme="dark"] .markdown-content :deep(p code),
-[data-theme="dark"] .markdown-content :deep(li code) {
-  background: rgba(99, 102, 241, 0.2);
-  color: #a5b4fc;
-}
-
-/* 引用块 */
-.markdown-content :deep(blockquote) {
-  border-left: 4px solid var(--accent-color, #6366f1);
-  background: rgba(99, 102, 241, 0.06);
-  padding: 8px 12px;
-  margin: 8px 0;
-  border-radius: 4px;
-  color: var(--text-sec, #64748b);
-  font-style: italic;
-}
-
-[data-theme="dark"] .markdown-content :deep(blockquote) {
-  background: rgba(99, 102, 241, 0.12);
-  border-left-color: #818cf8;
-}
-
-.markdown-content :deep(blockquote p) {
-  margin: 0;
-}
-
-/* 分割线 */
-.markdown-content :deep(hr) {
-  border: none;
-  border-top: 1px dashed var(--text-light, #94a3b8);
-  margin: 12px 0;
-}
-
-/* 表格 */
-.markdown-content :deep(table) {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 8px 0;
-  font-size: 13px;
-}
-
-.markdown-content :deep(th),
-.markdown-content :deep(td) {
-  border: 1px solid rgba(99, 102, 241, 0.2);
-  padding: 8px 12px;
-  text-align: left;
-}
-
-.markdown-content :deep(th) {
-  background: rgba(99, 102, 241, 0.1);
-  font-weight: 600;
-  color: var(--text-main, #334155);
-}
-
-.markdown-content :deep(tr:hover) {
-  background: rgba(99, 102, 241, 0.05);
-}
-
-[data-theme="dark"] .markdown-content :deep(th),
-[data-theme="dark"] .markdown-content :deep(td) {
-  border-color: #475569;
-}
-
-[data-theme="dark"] .markdown-content :deep(th) {
-  background: rgba(99, 102, 241, 0.2);
-}
-
-[data-theme="dark"] .markdown-content :deep(tr:hover) {
-  background: rgba(99, 102, 241, 0.1);
-}
-
-/* 链接 */
-.markdown-content :deep(a) {
-  color: #6366f1;
+.markdown-body :deep(a) {
+  color: var(--md-accent);
   text-decoration: none;
   border-bottom: 1px solid transparent;
-  transition: all 0.2s;
+  transition: border-bottom 0.2s;
+}
+.markdown-body :deep(a:hover) {
+  border-bottom-color: var(--md-accent);
 }
 
-.markdown-content :deep(a:hover) {
-  border-bottom-color: #6366f1;
-  text-decoration: underline;
+/* ============================================
+   5. 引用块 (AI 常用的总结样式)
+   ============================================ */
+.markdown-body :deep(blockquote) {
+  padding: 16px 20px;
+  background: var(--md-bg-block); /* 轻微的背景色 */
+  border-left: 4px solid var(--md-accent);
+  border-radius: 4px; /* 增加圆角 */
+  color: var(--md-text-secondary); /* 引用文字稍微淡一点 */
+  font-style: normal; /* 取消斜体，现在的趋势是正体更易读 */
 }
 
-[data-theme="dark"] .markdown-content :deep(a) {
-  color: #a5b4fc;
+/* 引用块内部的段落去除 margin，防止撑大 */
+.markdown-body :deep(blockquote p) {
+  margin-bottom: 0.5em;
+}
+.markdown-body :deep(blockquote p:last-child) {
+  margin-bottom: 0;
 }
 
-[data-theme="dark"] .markdown-content :deep(a:hover) {
-  border-bottom-color: #a5b4fc;
-}
-
-/* 强调 */
-.markdown-content :deep(strong) {
-  font-weight: 600;
-  color: var(--text-main, #334155);
-}
-
-.markdown-content :deep(em) {
-  font-style: italic;
-  color: var(--text-sec, #64748b);
-}
-
-/* 代码高亮主题 */
-.markdown-content :deep(pre code) {
-  color: var(--text-main, #334155);
-}
-
-/* 针对深色主题的调整 */
-[data-theme="dark"] .markdown-content :deep(pre code) {
+/* ============================================
+   6. 简单的代码行内样式
+   ============================================ */
+.markdown-body :deep(code) {
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-size: 0.9em;
+  padding: 0.2em 0.4em;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
   color: #e2e8f0;
 }
 </style>

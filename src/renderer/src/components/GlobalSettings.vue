@@ -26,135 +26,70 @@
               />
             </n-form-item>
             
-            <n-form-item label="意图识别提示词">
-              <n-input 
-                type="textarea" 
-                v-model:value="assistantConfig.intentSystem" 
-                placeholder="意图识别提示词"
-                :autosize="{ minRows: 4, maxRows: 10 }"
-              />
-            </n-form-item>
-            
-            <n-form-item label="意图识别模型">
-              <n-select v-model:value="assistantConfig.intentModel" :options="currentModels" />
-            </n-form-item>
-            
             <n-form-item label="温度">
-              <n-slider v-model:value="assistantConfig.temperature" :min="0" :max="2" :step="0.1" />
-              <n-input-number 
-                v-model:value="assistantConfig.temperature" 
-                :min="0" 
-                :max="2" 
-                :step="0.1" 
-                size="small" 
-                style="margin-top: 8px; width: 100px;"
-              />
+              <n-slider v-model:value="assistantConfig.temperature" :min="0" :max="1" :step="0.1" />
+              <div class="slider-value">{{ assistantConfig.temperature }}</div>
             </n-form-item>
             
             <n-form-item label="Top P">
-              <n-slider v-model:value="assistantConfig.top_p" :min="0" :max="1" :step="0.05" />
-              <n-input-number 
-                v-model:value="assistantConfig.top_p" 
-                :min="0" 
-                :max="1" 
-                :step="0.05" 
-                size="small" 
-                style="margin-top: 8px; width: 100px;"
-              />
+              <n-slider v-model:value="assistantConfig.top_p" :min="0" :max="1" :step="0.1" />
+              <div class="slider-value">{{ assistantConfig.top_p }}</div>
             </n-form-item>
             
-            <n-form-item label="启用工具">
+            <n-form-item label="启用的工具">
               <n-checkbox-group v-model:value="assistantConfig.enabledTools">
-                <n-space vertical>
-                  <n-checkbox value="search_records">检索记录（语义搜索）</n-checkbox>
-                  <n-checkbox value="query_records">查询记录（精确筛选）</n-checkbox>
-                  <n-checkbox value="sql_analysis">SQL 分析（统计分析）</n-checkbox>
-                  <n-checkbox value="calendar_resolver">日期解析（时间表达解析）</n-checkbox>
-                  <n-checkbox value="metadata_explorer">元数据浏览（字段值查询）</n-checkbox>
-                  <n-checkbox value="insight_analyst">洞察分析（深度模式识别）</n-checkbox>
+                <n-space>
+                  <n-checkbox value="search_records">语义搜索</n-checkbox>
+                  <n-checkbox value="query_records">精确查询</n-checkbox>
+                  <n-checkbox value="sql_analysis">统计分析</n-checkbox>
+                  <n-checkbox value="calendar_resolver">日历解析</n-checkbox>
+                  <n-checkbox value="metadata_explorer">元数据探索</n-checkbox>
+                  <n-checkbox value="insight_analyst">深度洞察</n-checkbox>
                 </n-space>
               </n-checkbox-group>
             </n-form-item>
           </n-form>
         </n-tab-pane>
-
+        
         <!-- 图表配置 -->
-        <n-tab-pane name="charts" tab="图表配置">
-          <n-collapse>
-            <!-- 共振分析配置 -->
-            <n-collapse-item title="共振分析" name="resonance">
-              <n-form label-placement="left" label-width="140">
-                <n-form-item label="赋能者阈值">
-                  <n-input-number v-model:value="chartsConfig.resonance.boosterThreshold" :min="0" :max="10" />
-                </n-form-item>
-                <n-form-item label="消耗者阈值">
-                  <n-input-number v-model:value="chartsConfig.resonance.drainerThreshold" :min="0" :max="10" />
-                </n-form-item>
-                <n-form-item label="最少出现次数">
-                  <n-input-number v-model:value="chartsConfig.resonance.minOccurrences" :min="1" />
-                </n-form-item>
-                <n-form-item label="榜单展示数量">
-                  <n-input-number v-model:value="chartsConfig.resonance.topN" :min="1" :max="20" />
-                </n-form-item>
-              </n-form>
-            </n-collapse-item>
-
-            <!-- 四象限配置 -->
-            <n-collapse-item title="四象限状态" name="quadrant">
-              <n-form label-placement="left" label-width="140">
-                <n-form-item label="能量分界线">
-                  <n-input-number 
-                    v-model:value="chartsConfig.quadrant.energyMidpoint" 
-                    :min="0" 
-                    :max="10" 
-                    placeholder="null=动态中位数"
-                    clearable
-                  />
-                  <n-text depth="3" style="font-size: 12px; margin-top: 4px;">留空则使用动态中位数</n-text>
-                </n-form-item>
-                <n-form-item label="掌控感分界线">
-                  <n-input-number 
-                    v-model:value="chartsConfig.quadrant.agencyMidpoint" 
-                    :min="-5" 
-                    :max="5" 
-                    placeholder="null=动态中位数"
-                    clearable
-                  />
-                  <n-text depth="3" style="font-size: 12px; margin-top: 4px;">留空则使用动态中位数</n-text>
-                </n-form-item>
-              </n-form>
-            </n-collapse-item>
-
-            <!-- 能量气象站配置 -->
-            <n-collapse-item title="能量气象站" name="energy">
-              <n-form label-placement="left" label-width="140">
-                <n-form-item label="生理状态最小显示%">
-                  <n-input-number v-model:value="chartsConfig.energyWeather.physicalStateMinDisplay" :min="0" :max="100" />
-                </n-form-item>
-              </n-form>
-            </n-collapse-item>
-
-            <!-- 通用配置 -->
-            <n-collapse-item title="通用设置" name="common">
-              <n-form label-placement="left" label-width="140">
-                <n-form-item label="默认加载记录数">
-                  <n-input-number v-model:value="chartsConfig.common.defaultLimit" :min="100" :max="2000" :step="100" />
-                </n-form-item>
-                <n-form-item label="最大加载记录数">
-                  <n-input-number v-model:value="chartsConfig.common.maxLimit" :min="500" :max="5000" :step="100" />
-                </n-form-item>
-                <n-form-item label="动画时长(ms)">
-                  <n-input-number v-model:value="chartsConfig.common.animationDuration" :min="0" :max="1000" :step="100" />
-                </n-form-item>
-              </n-form>
-            </n-collapse-item>
-          </n-collapse>
+        <n-tab-pane name="charts" tab="图表">
+          <n-form label-placement="top" label-width="auto">
+            <n-form-item label="启用的图表">
+              <n-checkbox-group v-model:value="chartsConfig.enabledCharts">
+                <n-space vertical>
+                  <n-checkbox value="pyramid">能量金字塔</n-checkbox>
+                  <n-checkbox value="rose">情绪玫瑰图</n-checkbox>
+                  <n-checkbox value="bar">情绪分布柱状图</n-checkbox>
+                  <n-checkbox value="scatter">能量散点图</n-checkbox>
+                  <n-checkbox value="heatmap">活动热力图</n-checkbox>
+                  <n-checkbox value="wordcloud">词云图</n-checkbox>
+                  <n-checkbox value="causality">因果链图</n-checkbox>
+                  <n-checkbox value="matrix">状态矩阵</n-checkbox>
+                  <n-checkbox value="resonance">共振分析</n-checkbox>
+                  <n-checkbox value="composition">生活构成</n-checkbox>
+                  <n-checkbox value="weather">能量天气</n-checkbox>
+                  <n-checkbox value="context">上下文云</n-checkbox>
+                  <n-checkbox value="temporal">时间锚点</n-checkbox>
+                </n-space>
+              </n-checkbox-group>
+            </n-form-item>
+            
+            <n-form-item label="图表尺寸">
+              <n-radio-group v-model:value="chartsConfig.chartSize">
+                <n-space>
+                  <n-radio value="small">小</n-radio>
+                  <n-radio value="medium">中</n-radio>
+                  <n-radio value="large">大</n-radio>
+                </n-space>
+              </n-radio-group>
+            </n-form-item>
+          </n-form>
         </n-tab-pane>
       </n-tabs>
-
+      
       <template #footer>
         <n-space justify="space-between">
-          <n-button @click="resetToDefault" type="warning">
+          <n-button @click="resetToDefault">
             恢复默认
           </n-button>
           <n-space>
@@ -196,8 +131,6 @@ const assistantConfig = ref({
   selectedBaseURL: loadedConfig.selectedBaseURL,
   selectedModel: loadedConfig.selectedModel,
   systemPrompt: loadedConfig.prompts.chatSystem,
-  intentSystem: loadedConfig.prompts.intentSystem,
-  intentModel: loadedConfig.intentModel,
   temperature: loadedConfig.temperature,
   top_p: loadedConfig.top_p,
   enabledTools: [...loadedConfig.enabledTools]
@@ -236,13 +169,11 @@ const saveSettings = () => {
   saveConfig({
     selectedBaseURL: assistantConfig.value.selectedBaseURL,
     selectedModel: assistantConfig.value.selectedModel,
-    intentModel: assistantConfig.value.intentModel,
     temperature: assistantConfig.value.temperature,
     top_p: assistantConfig.value.top_p,
     enabledTools: assistantConfig.value.enabledTools,
     prompts: {
-      chatSystem: assistantConfig.value.systemPrompt,
-      intentSystem: assistantConfig.value.intentSystem
+      chatSystem: assistantConfig.value.systemPrompt
     }
   })
 
@@ -267,8 +198,6 @@ const resetToDefault = () => {
       selectedBaseURL: DEFAULT_CONFIG.selectedBaseURL,
       selectedModel: DEFAULT_CONFIG.selectedModel,
       systemPrompt: DEFAULT_CONFIG.prompts.chatSystem,
-      intentSystem: DEFAULT_CONFIG.prompts.intentSystem,
-      intentModel: DEFAULT_CONFIG.intentModel,
       temperature: DEFAULT_CONFIG.temperature,
       top_p: DEFAULT_CONFIG.top_p,
       enabledTools: [...DEFAULT_CONFIG.enabledTools]
@@ -282,6 +211,12 @@ const resetToDefault = () => {
 </script>
 
 <style scoped>
+.slider-value {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #666;
+}
+
 :deep(.n-drawer-body-content-wrapper) {
   padding-bottom: 60px;
 }

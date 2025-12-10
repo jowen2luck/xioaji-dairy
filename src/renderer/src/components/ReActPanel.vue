@@ -132,6 +132,151 @@
                   </div>
                 </div>
                 
+                <!-- metadata_explorer 结果（表格展示） -->
+                <div v-else-if="isMetadataExplorer(result.result)" class="metadata-result">
+                  <div v-if="hasMetadataData(result.result)" class="metadata-table">
+                    <div class="metadata-header">
+                      <n-text depth="3" style="font-size: 12px;">
+                        字段: {{ getMetadataField(result.result) }} | 总计: {{ getMetadataTotal(result.result) }} 条
+                        <span v-if="getMetadataHasMore(result.result)">（仅显示前 {{ getMetadataReturned(result.result) }} 条）</span>
+                      </n-text>
+                    </div>
+                    <div class="metadata-items">
+                      <div 
+                        v-for="(item, idx) in getMetadataItems(result.result)" 
+                        :key="idx" 
+                        class="metadata-item"
+                      >
+                        <span class="metadata-value">{{ item.value }}</span>
+                        <n-tag size="tiny" type="info" round>{{ item.count }}</n-tag>
+                      </div>
+                    </div>
+                  </div>
+                  <n-empty v-else description="未找到相关元数据" size="small" />
+                </div>
+                
+                <!-- insight_analyst 结果（展示洞察和统计） -->
+                <div v-else-if="isInsightAnalyst(result.result)" class="insight-result">
+                  <div v-if="hasInsightData(result.result)" class="insight-content">
+                    <!-- 情绪-能量关联分析：增强展示 -->
+                    <div v-if="isEmotionEnergyAnalysis(result.result)" class="emotion-energy-analysis">
+                      <!-- 洞察摘要 -->
+                      <div v-if="getInsightSummary(result.result)" class="insight-summary-card">
+                        <n-alert type="info" :bordered="false">
+                          <template #icon>
+                            <n-icon><ThinkIcon /></n-icon>
+                          </template>
+                          {{ getInsightSummary(result.result) }}
+                        </n-alert>
+                      </div>
+                      
+                      <!-- 三态能量对比 -->
+                      <div class="emotion-stats-grid">
+                        <div class="emotion-stat-card positive">
+                          <div class="stat-label">
+                            <span class="label-dot"></span>
+                            <span>正面情绪</span>
+                          </div>
+                          <div class="stat-value">{{ getEmotionEnergy(result.result, 'positive') }}</div>
+                          <div class="stat-extra">
+                            <span class="sample-count">{{ getEmotionCount(result.result, 'positive') }} 样本</span>
+                            <span v-if="getEmotionStdDev(result.result, 'positive') !== null" class="std-dev">
+                              ±{{ getEmotionStdDev(result.result, 'positive') }}
+                            </span>
+                          </div>
+                          <!-- 实心进度条 -->
+                          <div class="energy-bar">
+                            <div class="energy-fill" :style="{ width: getEnergyBarWidth(result.result, 'positive') }"></div>
+                          </div>
+                        </div>
+                        
+                        <div class="emotion-stat-card neutral">
+                          <div class="stat-label">
+                            <span class="label-dot"></span>
+                            <span>中性情绪</span>
+                          </div>
+                          <div class="stat-value">{{ getEmotionEnergy(result.result, 'neutral') }}</div>
+                          <div class="stat-extra">
+                            <span class="sample-count">{{ getEmotionCount(result.result, 'neutral') }} 样本</span>
+                            <span v-if="getEmotionStdDev(result.result, 'neutral') !== null" class="std-dev">
+                              ±{{ getEmotionStdDev(result.result, 'neutral') }}
+                            </span>
+                          </div>
+                          <div class="energy-bar">
+                            <div class="energy-fill" :style="{ width: getEnergyBarWidth(result.result, 'neutral') }"></div>
+                          </div>
+                        </div>
+                        
+                        <div class="emotion-stat-card negative">
+                          <div class="stat-label">
+                            <span class="label-dot"></span>
+                            <span>负面情绪</span>
+                          </div>
+                          <div class="stat-value">{{ getEmotionEnergy(result.result, 'negative') }}</div>
+                          <div class="stat-extra">
+                            <span class="sample-count">{{ getEmotionCount(result.result, 'negative') }} 样本</span>
+                            <span v-if="getEmotionStdDev(result.result, 'negative') !== null" class="std-dev">
+                              ±{{ getEmotionStdDev(result.result, 'negative') }}
+                            </span>
+                          </div>
+                          <div class="energy-bar">
+                            <div class="energy-fill" :style="{ width: getEnergyBarWidth(result.result, 'negative') }"></div>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <!-- 分析质量指标 -->
+                      <div class="quality-indicators">
+                        <div class="quality-item">
+                          <span class="quality-label">总样本数</span>
+                          <span class="quality-value">{{ getQualityMetric(result.result, 'totalSamples') }}</span>
+                        </div>
+                        <div class="quality-item">
+                          <span class="quality-label">数据覆盖率</span>
+                          <span class="quality-value">{{ getQualityMetric(result.result, 'coverage') }}%</span>
+                        </div>
+                        <div v-if="getComparisonSignificance(result.result)" class="quality-item">
+                          <span class="quality-label">显著性</span>
+                          <n-tag :type="getSignificanceTagType(result.result)" size="tiny" round>
+                            {{ getSignificanceLabel(result.result) }}
+                          </n-tag>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <!-- 其他类型分析：使用通用展示 -->
+                    <div v-else class="generic-insight">
+                      <!-- 洞察摘要 -->
+                      <div v-if="getInsightSummary(result.result)" class="insight-summary">
+                        <n-alert type="info" :bordered="false">
+                          <template #icon>
+                            <n-icon><ThinkIcon /></n-icon>
+                          </template>
+                          {{ getInsightSummary(result.result) }}
+                        </n-alert>
+                      </div>
+                      
+                      <!-- 统计信息 -->
+                      <div class="insight-stats">
+                        <n-statistic label="分析记录数" :value="getInsightRecordCount(result.result)" />
+                        <n-statistic label="AI增强覆盖" :value="getInsightAiCoverage(result.result) + '%'" />
+                      </div>
+                    </div>
+                    
+                    <!-- 详细数据（折叠展示） -->
+                    <n-collapse :default-expanded-names="[]" class="insight-data-collapse">
+                      <n-collapse-item title="查看详细数据" name="detail">
+                        <n-code :code="formatJSON(getInsightData(result.result))" language="json" :word-wrap="true" />
+                      </n-collapse-item>
+                    </n-collapse>
+                  </div>
+                  <n-empty v-else description="分析结果为空" size="small">
+                    <template #extra>
+                      <n-text depth="3" style="font-size: 12px;">可能没有匹配的数据，请尝试调整查询条件</n-text>
+                    </template>
+                  </n-empty>
+                </div>
+                
                 <!-- SQL分析结果（含空状态） -->
                 <div v-else-if="isSqlAnalysis(result.result)" class="sql-analysis-result">
                   <div v-if="hasSqlData(result.result)" class="sql-data-summary">
@@ -158,10 +303,14 @@
               <span>已生成最终答案</span>
             </div>
             
-            <!-- 加载中状态 -->
+            <!-- 加载中状态(省略号动画) -->
             <div v-if="step.type === 'loading'" class="loading-state">
-              <n-spin size="small" />
-              <span>{{ step.detail || '正在处理...' }}</span>
+              <span class="thinking-text">{{ step.detail || '正在思考' }}</span>
+              <span class="loading-dots">
+                <span class="dot"></span>
+                <span class="dot"></span>
+                <span class="dot"></span>
+              </span>
             </div>
           </div>
         </n-collapse-item>
@@ -224,7 +373,9 @@ onUnmounted(() => {
 const TOOL_LABELS = {
   search_records: '检索记录',
   query_records: '查询记录',
-  sql_analysis: 'SQL 分析'
+  sql_analysis: 'SQL 分析',
+  metadata_explorer: '元数据探索',
+  insight_analyst: '洞察分析'
 }
 
 const getToolLabel = (name) => TOOL_LABELS[name] || name
@@ -383,6 +534,142 @@ const getSqlRecordCount = (result) => {
 // 获取 SQL 分析的 AI 增强数
 const getSqlAiCount = (result) => {
   return result?.data?.aiEnhancedCount || 0
+}
+
+// 检查是否为 metadata_explorer 结果
+const isMetadataExplorer = (result) => {
+  if (!result) return false
+  // 检查 toolName 或者 data 中的字段
+  return result.toolName === 'metadata_explorer' || 
+         (result.data?.field && Array.isArray(result.data?.metadata))
+}
+
+// 检查 metadata_explorer 是否有数据
+const hasMetadataData = (result) => {
+  // 数据在 data 字段中
+  const data = result.toolName === 'metadata_explorer' ? result.data : result
+  return data?.metadata && Array.isArray(data.metadata) && data.metadata.length > 0
+}
+
+// 检查是否为 insight_analyst 结果
+const isInsightAnalyst = (result) => {
+  if (!result) return false
+  // 检查 toolName 或者 data 中的 analysisType
+  return result.toolName === 'insight_analyst' || 
+         (result.data?.analysisType !== undefined)
+}
+
+// 检查 insight_analyst 是否有数据
+const hasInsightData = (result) => {
+  // 数据在 data 字段中
+  const data = result.toolName === 'insight_analyst' ? result.data : result
+  // insight_analyst 即使 data.data 为空对象，也可能有 insight 和统计信息
+  return data && (data.insight || data.recordCount > 0)
+}
+
+// metadata_explorer 数据访问辅助函数
+const getMetadataField = (result) => {
+  const data = result.toolName === 'metadata_explorer' ? result.data : result
+  return data?.field || ''
+}
+
+const getMetadataTotal = (result) => {
+  const data = result.toolName === 'metadata_explorer' ? result.data : result
+  return data?.total || 0
+}
+
+const getMetadataReturned = (result) => {
+  const data = result.toolName === 'metadata_explorer' ? result.data : result
+  return data?.returned || 0
+}
+
+const getMetadataHasMore = (result) => {
+  const data = result.toolName === 'metadata_explorer' ? result.data : result
+  return data?.hasMore || false
+}
+
+const getMetadataItems = (result) => {
+  const data = result.toolName === 'metadata_explorer' ? result.data : result
+  return data?.metadata || []
+}
+
+// insight_analyst 数据访问辅助函数
+const getInsightSummary = (result) => {
+  const data = result.toolName === 'insight_analyst' ? result.data : result
+  return data?.insight || ''
+}
+
+const getInsightRecordCount = (result) => {
+  const data = result.toolName === 'insight_analyst' ? result.data : result
+  return data?.recordCount || 0
+}
+
+const getInsightAiCoverage = (result) => {
+  const data = result.toolName === 'insight_analyst' ? result.data : result
+  return data?.aiCoverage || 0
+}
+
+const getInsightData = (result) => {
+  const data = result.toolName === 'insight_analyst' ? result.data : result
+  return data?.data || {}
+}
+
+// 检查是否为 emotion_energy_correlation 分析
+const isEmotionEnergyAnalysis = (result) => {
+  const data = result.toolName === 'insight_analyst' ? result.data : result
+  return data?.analysisType === 'emotion_energy_correlation'
+}
+
+// 获取情绪能量值
+const getEmotionEnergy = (result, emotionType) => {
+  const data = result.toolName === 'insight_analyst' ? result.data : result
+  const value = data?.[emotionType]
+  return value !== null && value !== undefined ? value : '-'
+}
+
+// 获取情绪样本数
+const getEmotionCount = (result, emotionType) => {
+  const data = result.toolName === 'insight_analyst' ? result.data : result
+  return data?.counts?.[emotionType] || 0
+}
+
+// 获取情绪标准差
+const getEmotionStdDev = (result, emotionType) => {
+  const data = result.toolName === 'insight_analyst' ? result.data : result
+  return data?.stats?.[emotionType]?.stdDev ?? null
+}
+
+// 计算能量条宽度（相对于 10 分满分）
+const getEnergyBarWidth = (result, emotionType) => {
+  const value = getEmotionEnergy(result, emotionType)
+  if (value === '-') return '0%'
+  return `${(parseFloat(value) / 10) * 100}%`
+}
+
+// 获取质量指标
+const getQualityMetric = (result, metricName) => {
+  const data = result.toolName === 'insight_analyst' ? result.data : result
+  return data?.quality?.[metricName] || 0
+}
+
+// 获取显著性级别
+const getComparisonSignificance = (result) => {
+  const data = result.toolName === 'insight_analyst' ? result.data : result
+  return data?.comparison?.significance || null
+}
+
+// 显著性标签文本
+const getSignificanceLabel = (result) => {
+  const sig = getComparisonSignificance(result)
+  const labels = { high: '高', medium: '中', low: '低' }
+  return labels[sig] || '-'
+}
+
+// 显著性标签类型
+const getSignificanceTagType = (result) => {
+  const sig = getComparisonSignificance(result)
+  const types = { high: 'success', medium: 'warning', low: 'default' }
+  return types[sig] || 'default'
 }
 </script>
 
@@ -695,6 +982,301 @@ const getSqlAiCount = (result) => {
   color: var(--color-primary);
 }
 
+/* metadata_explorer 结果 */
+.metadata-result {
+  padding: 8px;
+  background: var(--color-background);
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+}
+
+.metadata-header {
+  padding: 8px 0;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.metadata-items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.metadata-items::-webkit-scrollbar {
+  width: 4px;
+}
+
+.metadata-items::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 2px;
+}
+
+.metadata-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: var(--color-background-soft);
+  border-radius: 4px;
+  transition: background 0.2s ease;
+}
+
+.metadata-item:hover {
+  background: var(--color-background-hover);
+}
+
+.metadata-value {
+  font-size: 13px;
+  color: var(--color-text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* insight_analyst 结果 */
+.insight-result {
+  padding: 12px;
+  background: var(--color-background);
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+}
+
+.insight-content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* 情绪-能量分析增强展示 */
+.emotion-energy-analysis {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.insight-summary-card {
+  margin-bottom: 2px;
+}
+
+.insight-summary-card :deep(.n-alert) {
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 10px 12px;
+}
+
+/* 三态能量对比网格 */
+.emotion-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+/* 情绪统计卡片 */
+.emotion-stat-card {
+  background: var(--color-background-soft);
+  border-radius: 8px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.emotion-stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.emotion-stat-card.positive {
+  border-color: rgba(82, 196, 26, 0.3);
+  background: linear-gradient(135deg, rgba(82, 196, 26, 0.05) 0%, var(--color-background-soft) 100%);
+}
+
+.emotion-stat-card.neutral {
+  border-color: rgba(128, 128, 128, 0.2);
+  background: linear-gradient(135deg, rgba(128, 128, 128, 0.03) 0%, var(--color-background-soft) 100%);
+}
+
+.emotion-stat-card.negative {
+  border-color: rgba(245, 108, 108, 0.3);
+  background: linear-gradient(135deg, rgba(245, 108, 108, 0.05) 0%, var(--color-background-soft) 100%);
+}
+
+/* 标签 */
+.stat-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  margin-bottom: 8px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.label-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.positive .label-dot {
+  background: #52c41a;
+}
+
+.neutral .label-dot {
+  background: #8c8c8c;
+}
+
+.negative .label-dot {
+  background: #f56c6c;
+}
+
+/* 能量值 */
+.stat-value {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1;
+  margin-bottom: 6px;
+}
+
+.positive .stat-value {
+  color: #52c41a;
+}
+
+.neutral .stat-value {
+  color: #8c8c8c;
+}
+
+.negative .stat-value {
+  color: #f56c6c;
+}
+
+/* 附加信息 */
+.stat-extra {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  margin-bottom: 10px;
+}
+
+.sample-count {
+  opacity: 0.8;
+}
+
+.std-dev {
+  padding: 2px 6px;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 3px;
+  font-family: 'Consolas', monospace;
+}
+
+/* 能量进度条 */
+.energy-bar {
+  height: 4px;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+
+.energy-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.positive .energy-fill {
+  background: linear-gradient(90deg, #52c41a 0%, #73d13d 100%);
+}
+
+.neutral .energy-fill {
+  background: linear-gradient(90deg, #8c8c8c 0%, #a6a6a6 100%);
+}
+
+.negative .energy-fill {
+  background: linear-gradient(90deg, #f56c6c 0%, #ff8787 100%);
+}
+
+/* 质量指标 */
+.quality-indicators {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 10px;
+  background: var(--color-background-soft);
+  border-radius: 6px;
+  border: 1px dashed var(--color-border);
+}
+
+.quality-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.quality-label {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.quality-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+/* 通用洞察展示 */
+.generic-insight {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.insight-summary {
+  margin-bottom: 4px;
+}
+
+.insight-summary :deep(.n-alert) {
+  font-size: 13px;
+}
+
+.insight-stats {
+  display: flex;
+  gap: 24px;
+  justify-content: center;
+  padding: 8px 0;
+}
+
+.insight-stats :deep(.n-statistic) {
+  text-align: center;
+}
+
+.insight-stats :deep(.n-statistic-value) {
+  font-size: 20px;
+  color: var(--color-primary);
+}
+
+.insight-data-collapse :deep(.n-collapse-item__header) {
+  font-size: 12px;
+  padding: 8px 12px;
+}
+
+.insight-data-collapse :deep(.n-code) {
+  font-size: 11px;
+  max-height: 200px;
+  overflow: auto;
+}
+
 /* 最终答案标识 */
 .final-badge {
   display: flex;
@@ -707,7 +1289,7 @@ const getSqlAiCount = (result) => {
   font-size: 13px;
 }
 
-/* 加载状态 */
+/* 加载状态(省略号动画) */
 .loading-state {
   display: flex;
   align-items: center;
@@ -715,6 +1297,48 @@ const getSqlAiCount = (result) => {
   padding: 12px;
   color: var(--color-text-secondary);
   font-size: 13px;
+}
+
+.thinking-text {
+  color: var(--color-text);
+  font-weight: 500;
+}
+
+.loading-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.loading-dots .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  animation: dotPulse 1.4s infinite ease-in-out;
+}
+
+.loading-dots .dot:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.loading-dots .dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.loading-dots .dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes dotPulse {
+  0%, 60%, 100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
 }
 
 /* 步骤类型边框颜色 */

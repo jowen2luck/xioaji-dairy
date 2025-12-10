@@ -83,7 +83,20 @@ export function registerIPCHandlers(config = {}) {
             })
           }
           
-          intentContext = await analyzeIntentWithLLM(userQuery, intentLLM)
+      // 【修改点】将 messages (历史记录) 传入分析器，实现上下文指代消解
+          // 这样意图分析器就能"看到"历史对话，理解"它"、"那个项目"等指代词
+          console.log('[IPC:chat] messages format check:', {
+            isArray: Array.isArray(messages),
+            length: messages.length,
+            sample: messages.slice(0, 2).map(m => ({
+              role: m.role,
+              hasContent: !!m.content,
+              contentType: typeof m.content,
+              contentLength: m.content?.length || 0
+            }))
+          })
+          console.log('[IPC:chat] Passing history to intent analyzer, messages length:', messages.length)
+          intentContext = await analyzeIntentWithLLM(userQuery, intentLLM, messages)
           
           if (intentContext && intentContext.suggested_pipeline) {
             // 使用意图分析推荐的工具链
@@ -140,6 +153,7 @@ export function registerIPCHandlers(config = {}) {
         baseURL,
         apiKey: getAPIKeyForBaseURL(baseURL),
         model,
+        intentModel: userConfig?.intentModel, // 传递意图识别模型配置
         temperature: userConfig?.temperature ?? 0.7,
         top_p: userConfig?.top_p ?? 0.9,
       })

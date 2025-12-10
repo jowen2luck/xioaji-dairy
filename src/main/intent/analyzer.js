@@ -6,28 +6,48 @@
 
 import { getIntentPrompt, COMPLEXITY_MAX_ITERATIONS } from '../config/intentPrompts.js'
 
+// 全局配置：意图分析器保留的历史消息轮数
+const INTENT_HISTORY_CONTEXT_LENGTH = 8
+
 /**
  * 使用 LLM 分析用户意图，返回结构化的意图上下文
  * @param {string} userQuery - 用户查询文本
  * @param {Object} llm - LLM 实例
+ * @param {Array} history - 对话历史消息数组，用于上下文指代消解
  * @returns {Promise<Object>} 结构化的意图上下文对象
  */
-export async function analyzeIntentWithLLM(userQuery, llm) {
+export async function analyzeIntentWithLLM(userQuery, llm, history = []) {
   if (!userQuery || typeof userQuery !== 'string') {
     return null
   }
 
   try {
-    console.log('[Intent] Analyzing with LLM:', userQuery)
+    console.log('[Intent] Analyzing with LLM & Context:', userQuery)
+    console.log('[Intent] Received history length:', Array.isArray(history) ? history.length : 'NOT AN ARRAY')
+    console.log('[Intent] History messages sample:', history.slice(0, 3).map(m => ({ role: m.role, length: m.content?.length || 0 })))
     
     // 获取意图分析的系统提示词
     const systemPrompt = getIntentPrompt()
     
-    // 调用 LLM
+    // 1. 构建带有历史上下文的消息链
+    // 过滤掉前端传来的旧 system prompt，只保留 user 和 assistant 的对话
+    const contextMessages = history
+      .filter(m => m.role !== 'system')
+      .slice(-INTENT_HISTORY_CONTEXT_LENGTH); // 使用全局配置的上下文长度
+    
+    console.log('[Intent] After filtering & slicing - contextMessages length:', contextMessages.length)
+    console.log('[Intent] Filtered messages:', contextMessages.map(m => ({ role: m.role, contentLength: m.content?.length || 0 })))
     const messages = [
       { role: 'system', content: systemPrompt },
+      ...contextMessages, // 插入历史记忆
       { role: 'user', content: userQuery }
     ]
+    
+    console.log('[Intent] Messages with history:', {
+      historyLength: contextMessages.length,
+      totalMessages: messages.length,
+      currentQuery: userQuery
+    })
     
     const response = await llm.invoke(messages)
     const content = typeof response === 'string' ? response : response.content

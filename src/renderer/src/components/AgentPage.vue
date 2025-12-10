@@ -141,19 +141,34 @@ const sendMessage = async () => {
       traceSteps.value = []
       traceSteps.value.push({ type: 'think', title: '理解问题', detail: message, time: new Date() })
       
+      // 【改进】构建完整的消息历史，包括前面的对话轮次
+      const messageHistory = [
+        {
+          role: 'system',
+          content: DEFAULT_CONFIG.prompts?.chatSystem || '你是一个专业的日记分析助手，可以帮助用户查询、分析和理解他们的日记数据。请用简洁、友好的方式回答问题。'
+        }
+      ]
+      
+      // 添加历史消息（排除初始欢迎信息）
+      messages.value.forEach(msg => {
+        messageHistory.push({
+          role: msg.sender === 'user' ? 'user' : 'assistant',
+          content: msg.content
+        })
+      })
+      
+      // 添加当前消息
+      messageHistory.push({
+        role: 'user',
+        content: message
+      })
+      
+      console.log('[AgentPage] Sending message history with', messageHistory.length, 'messages')
+      
       // 使用新的 assistant:chat 接口
       const result = await window.electron.ipcRenderer.invoke('assistant:chat', {
         userQuery: message,
-        messages: [
-          {
-            role: 'system',
-            content: DEFAULT_CONFIG.prompts?.chatSystem || '你是一个专业的日记分析助手，可以帮助用户查询、分析和理解他们的日记数据。请用简洁、友好的方式回答问题。'
-          },
-          {
-            role: 'user',
-            content: message
-          }
-        ],
+        messages: messageHistory,
         model: DEFAULT_CONFIG.selectedModel || 'qwen-plus-2025-09-11',
         baseURL: DEFAULT_CONFIG.selectedBaseURL || 'https://dashscope.aliyuncs.com/compatible-mode/v1',
         tools: DEFAULT_CONFIG.enabledTools.map(name => ({ name }))

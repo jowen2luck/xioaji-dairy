@@ -252,6 +252,7 @@
 - **实现细节**:
   - 基于关键词匹配的意图识别
   - 支持多种工具类型的推荐
+  - **增强功能**：支持模糊回忆场景识别，当用户使用"大概"、"好像"、"记得"等不确定词汇时，优先推荐 search_records 工具而非 query_records 工具
 
 - **处理流程**:
   1. 接收用户查询文本和可用工具列表
@@ -277,6 +278,19 @@
         "sql_analysis"
       ]
       ```
+    - **增强功能**：
+      - 支持模糊回忆场景识别（检测"大概"、"好像"、"记得"等关键词）
+      - 在模糊回忆场景下，优先推荐 search_records 工具
+      - 可与 calendar_resolver 配合使用处理时间范围
+  - `intentPrompts.js`: 意图分析配置文件，定义结构化意图输出格式和系统提示词。
+    - **功能**：
+      - 定义意图分析的系统提示词
+      - 指导LLM进行结构化的意图判断
+      - **增强功能**：新增模糊回忆（Fuzzy Recall）处理策略，明确指导LLM在用户使用"大概"、"好像"等不确定词汇时优先使用语义搜索
+    - **关键特性**：
+      - 支持结构化意图输出（primary_intent, complexity, temporal_context等）
+      - 包含特殊场景处理逻辑（如模糊回忆）
+      - 提供详细的示例说明不同场景下的意图判断
 
 #### 1.5 LLM 模块 (src/main/llm/)
 
@@ -336,7 +350,7 @@
       ```javascript
       {
         query: String,               // 搜索关键词
-        conditions: Object           // 过滤条件
+        conditions: Object           // 过滤条件（支持时间范围和情绪过滤）
       }
       ```
     - **输出**:
@@ -346,6 +360,11 @@
         debug: Object                // 调试信息
       }
       ```
+    - **增强功能**:
+      - 支持向量语义搜索，擅长理解内容含义而非精确匹配
+      - 支持 conditions.dateRange 参数进行时间范围后置过滤
+      - 支持 conditions.emotionFocus 参数进行情绪倾向过滤
+      - 在模糊回忆场景下，可与 calendar_resolver 配合使用实现"在特定时间范围内进行语义搜索"
   - `queryRecords.js`: 精确查询工具，支持结构化条件查询。
     - **输入**: 
       ```javascript
@@ -357,7 +376,7 @@
         timeRange: String,           // 时间段
         durationMin: Number,         // 最小时长
         durationMax: Number,         // 最大时长
-        contentKeyword: String,      // 内容关键词
+        contentKeyword: String,      // 内容关键词（⚠️仅限精确匹配单词或短语，如"开心"、"项目A"）。如果用户输入的是长句子或模糊描述（如"好像写到了..."），严禁使用此字段，请改用 search_records 工具进行语义检索！
         moodTags: Array,             // 情绪标签
         minEnergyLevel: Number,      // 最小能量值
         maxEnergyLevel: Number,      // 最大能量值
@@ -550,6 +569,7 @@
 2. **双引擎数据存储**: 采用 AlaSQL 作为内存 SQL 引擎负责精确统计与筛选，向量库负责模糊搜索与语义感知。
 3. **AI 增强 ETL**: 使用大模型深度提取日记中的非结构化信息，实现四维度结构的元数据提取。
 4. **模块化解耦**: 各模块之间职责清晰，通过 IPC 进行通信，便于维护和扩展。
+5. **智能检索增强**: 实现了模糊回忆场景下的混合检索策略，结合语义搜索和精确查询，提升用户查找记忆的准确性。
 
 ## 总结
 

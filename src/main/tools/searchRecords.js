@@ -1,18 +1,34 @@
 /**
- * 搜索记录工具 (增强版)
- * 新增功能：融合 AI 元数据增强语义检索能力
- * 
- * 增强策略：
- * - 向量构建时融合 _ai_meta.summary、mood_tags、items
- * - 权重设计：原文 50% + 摘要 30% + 情绪 10% + 实体 10%
+ * 搜索记录工具 (多粒度切片增强版)
+ * 核心升级：
+ * - 宏观切片：summary + mood + items + people + topics + location
+ * - 微观切片：滑窗算法（窗口150字，重叠50字）
+ * - Max-Sim检索：单文档多向量表示，取最高相似度
+ * - 文件缓存：持久化向量数据库，避免重复计算
  */
 
 import { Tool, ToolResult } from './base.js'
 import { loadAndEnrichData } from '../data/index.js'
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
+import crypto from 'crypto'
+
+// ==================== 配置与缓存路径 ====================
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const CACHE_FILE_PATH = path.join(__dirname, '..', '.cache', 'vector_db_cache.json')
+
+const CHUNKING_CONFIG = {
+  microWindowSize: 150,  // 微观切片窗口大小（字符）
+  microOverlap: 50,      // 微观切片重叠大小（字符）
+  minChunkLength: 30,    // 最小切片长度（过短的不处理）
+}
 
 // ==================== 向量化和检索模块 ====================
 
-let vectorDB = []
+let vectorDB = []  // 扁平化切片数组
 let embeddingModel = null
 
 async function loadEmbeddingModel() {
@@ -71,72 +87,224 @@ function cosineSimilarity(vecA, vecB) {
 }
 
 /**
- * 构建增强文本（融合 AI 元数据）
- * 权重通过文本重复实现：
- * - 原文 1 次 (50% 基准)
- * - 摘要 3 次 (30% 权重)
- * - 情绪标签 1 次 (10% 权重)
- * - 实体 1 次 (10% 权重)
+ * 构建宏观切片（Macro Chunk）
+ * 融合 AI 元数据的高层语义：summary, mood, items, people, topics, location
  */
-function buildEnhancedText(item) {
-  let baseText = item._meta_plain_text || 
-                 [item.ganshou || '', item.shanggexiangmu || '', item.chixushijian || '', item.time || '']
-                   .filter(Boolean)
-                   .join(' ')
+function buildMacroChunk(item) {
+  const aiMeta = item._ai_meta
+  if (!aiMeta) return null
 
-  // 如果有 AI 元数据，进行融合增强
-  if (item._ai_meta) {
-    const aiMeta = item._ai_meta
-    const enhancementParts = []
+  const parts = []
 
-    // 摘要重复 3 次（30% 权重）
-    if (aiMeta.summary) {
-      enhancementParts.push(aiMeta.summary, aiMeta.summary, aiMeta.summary)
-    }
+  // 摘要（核心）
+  if (aiMeta.summary) parts.push(aiMeta.summary)
 
-    // 情绪标签（10% 权重）
-    if (Array.isArray(aiMeta.mood_tags) && aiMeta.mood_tags.length > 0) {
-      enhancementParts.push(aiMeta.mood_tags.join(' '))
-    }
-
-    // 实体（10% 权重）
-    if (Array.isArray(aiMeta.items) && aiMeta.items.length > 0) {
-      enhancementParts.push(aiMeta.items.join(' '))
-    }
-
-    // 人物（额外增强）
-    if (Array.isArray(aiMeta.people_involved) && aiMeta.people_involved.length > 0) {
-      enhancementParts.push(aiMeta.people_involved.join(' '))
-    }
-
-    // 合并增强文本
-    if (enhancementParts.length > 0) {
-      baseText = `${baseText} ${enhancementParts.join(' ')}`
-      console.log('[SearchRecordsTool] Enhanced text with AI metadata:', baseText.substring(0, 100) + '...')
-    }
+  // 情绪标签
+  if (Array.isArray(aiMeta.mood_tags) && aiMeta.mood_tags.length > 0) {
+    parts.push('情绪：' + aiMeta.mood_tags.join('、'))
   }
 
-  return baseText
+  // 实体（物品、书名、食物等）
+  if (Array.isArray(aiMeta.items) && aiMeta.items.length > 0) {
+    parts.push('相关：' + aiMeta.items.join('、'))
+  }
+
+  // 涉及人物
+  if (Array.isArray(aiMeta.people_involved) && aiMeta.people_involved.length > 0) {
+    parts.push('人物：' + aiMeta.people_involved.join('、'))
+  }
+
+  // 主题/关键词
+  if (Array.isArray(aiMeta.topics) && aiMeta.topics.length > 0) {
+    parts.push('主题：' + aiMeta.topics.join('、'))
+  } else if (Array.isArray(aiMeta.keywords) && aiMeta.keywords.length > 0) {
+    parts.push('关键词：' + aiMeta.keywords.join('、'))
+  }
+
+  // 地点/场景
+  if (aiMeta.location) {
+    parts.push('地点：' + aiMeta.location)
+  } else if (aiMeta.scene) {
+    parts.push('场景：' + aiMeta.scene)
+  }
+
+  return parts.length > 0 ? parts.join('；') : null
 }
 
-async function buildVectorDatabase(data) {
-  vectorDB = []
+/**
+ * 构建微观切片（Micro Chunks）
+ * 使用滑窗算法切分正文，捕捉局部细节
+ */
+function buildMicroChunks(item) {
+  const baseText = item._meta_plain_text || 
+    [item.ganshou || '', item.shanggexiangmu || '', item.chixushijian || '']
+      .filter(Boolean)
+      .join(' ')
 
-  for (const item of data) {
-    // 使用增强文本构建向量
-    const text = buildEnhancedText(item)
+  if (!baseText || baseText.length < CHUNKING_CONFIG.minChunkLength) {
+    return []
+  }
 
-    if (text.trim()) {
-      const embedding = await embedText(text)
-      vectorDB.push({
-        id: item._meta_id || item._id || `${item.time || ''}_${item.shanggexiangmu || ''}_${item.ganshou || ''}`,
-        embedding,
-        original: item, // 保留完整的增强数据(包含 _meta_ 和 _ai_meta 字段)
-      })
+  const chunks = []
+  const windowSize = CHUNKING_CONFIG.microWindowSize
+  const step = windowSize - CHUNKING_CONFIG.microOverlap
+
+  for (let i = 0; i < baseText.length; i += step) {
+    const chunk = baseText.substring(i, i + windowSize)
+    if (chunk.length >= CHUNKING_CONFIG.minChunkLength) {
+      chunks.push(chunk)
     }
   }
 
-  console.log(`[SearchRecordsTool] Vector database built with ${vectorDB.length} entries (AI-enhanced)`)
+  return chunks
+}
+
+/**
+ * 为单条记录生成所有切片（宏观 + 微观）
+ */
+function generateChunksForRecord(item) {
+  const parentId = item._meta_id || item._id || 
+    `${item.time || ''}_${item.shanggexiangmu || ''}_${item.ganshou || ''}`
+  
+  const chunks = []
+
+  // 1. 宏观切片（1个）
+  const macroText = buildMacroChunk(item)
+  if (macroText) {
+    chunks.push({
+      id: `${parentId}_macro`,
+      parentId,
+      text: macroText,
+      type: 'macro',
+      original: item
+    })
+  }
+
+  // 2. 微观切片（多个）
+  const microTexts = buildMicroChunks(item)
+  microTexts.forEach((text, index) => {
+    chunks.push({
+      id: `${parentId}_micro_${index}`,
+      parentId,
+      text,
+      type: 'micro',
+      original: item
+    })
+  })
+
+  return chunks
+}
+
+/**
+ * 计算数据指纹（用于缓存失效检测）
+ */
+function computeDataFingerprint(data) {
+  const summary = {
+    count: data.length,
+    lastModified: Math.max(...data.map(item => {
+      const time = item.time || item._meta_updated || ''
+      return new Date(time).getTime() || 0
+    }))
+  }
+  return crypto.createHash('md5').update(JSON.stringify(summary)).digest('hex')
+}
+
+/**
+ * 加载向量数据库缓存
+ */
+function loadVectorCache() {
+  try {
+    if (!fs.existsSync(CACHE_FILE_PATH)) {
+      console.log('[VectorDB] Cache file not found, will build new database')
+      return null
+    }
+
+    const cacheData = JSON.parse(fs.readFileSync(CACHE_FILE_PATH, 'utf-8'))
+    console.log(`[VectorDB] Cache loaded: ${cacheData.chunks?.length || 0} chunks, fingerprint: ${cacheData.fingerprint}`)
+    return cacheData
+  } catch (error) {
+    console.error('[VectorDB] Failed to load cache:', error.message)
+    return null
+  }
+}
+
+/**
+ * 保存向量数据库缓存
+ */
+function saveVectorCache(chunks, fingerprint) {
+  try {
+    const cacheDir = path.dirname(CACHE_FILE_PATH)
+    if (!fs.existsSync(cacheDir)) {
+      fs.mkdirSync(cacheDir, { recursive: true })
+    }
+
+    const cacheData = {
+      fingerprint,
+      timestamp: new Date().toISOString(),
+      chunkCount: chunks.length,
+      chunks: chunks.map(chunk => ({
+        id: chunk.id,
+        parentId: chunk.parentId,
+        text: chunk.text,
+        type: chunk.type,
+        vector: chunk.vector
+      }))
+    }
+
+    fs.writeFileSync(CACHE_FILE_PATH, JSON.stringify(cacheData, null, 2), 'utf-8')
+    console.log(`[VectorDB] Cache saved: ${chunks.length} chunks written to ${CACHE_FILE_PATH}`)
+  } catch (error) {
+    console.error('[VectorDB] Failed to save cache:', error.message)
+  }
+}
+
+/**
+ * 构建向量数据库（扁平化切片结构）
+ */
+async function buildVectorDatabase(data, forceRebuild = false) {
+  const fingerprint = computeDataFingerprint(data)
+
+  // 尝试加载缓存
+  if (!forceRebuild) {
+    const cache = loadVectorCache()
+    if (cache && cache.fingerprint === fingerprint) {
+      console.log('[VectorDB] Using cached vectors (fingerprint matched)')
+      vectorDB = cache.chunks.map(chunk => ({
+        ...chunk,
+        original: data.find(item => {
+          const id = item._meta_id || item._id || `${item.time || ''}_${item.shanggexiangmu || ''}_${item.ganshou || ''}`
+          return id === chunk.parentId
+        })
+      }))
+      return
+    }
+  }
+
+  // 构建新的向量数据库
+  console.log('[VectorDB] Building new vector database with multi-granularity chunking...')
+  vectorDB = []
+  let macroCount = 0
+  let microCount = 0
+
+  for (const item of data) {
+    const chunks = generateChunksForRecord(item)
+    
+    for (const chunk of chunks) {
+      const vector = await embedText(chunk.text)
+      vectorDB.push({
+        ...chunk,
+        vector
+      })
+
+      if (chunk.type === 'macro') macroCount++
+      else if (chunk.type === 'micro') microCount++
+    }
+  }
+
+  console.log(`[VectorDB] Built ${vectorDB.length} chunks (${macroCount} macro + ${microCount} micro) from ${data.length} records`)
+  
+  // 保存缓存
+  saveVectorCache(vectorDB, fingerprint)
 }
 
 /**
@@ -144,9 +312,37 @@ async function buildVectorDatabase(data) {
  */
 export function clearVectorCache() {
   vectorDB = []
-  console.log('[SearchRecordsTool] Vector cache cleared, will rebuild on next search')
+  
+  // 删除缓存文件
+  try {
+    if (fs.existsSync(CACHE_FILE_PATH)) {
+      fs.unlinkSync(CACHE_FILE_PATH)
+      console.log('[VectorDB] Cache file deleted')
+    }
+  } catch (error) {
+    console.error('[VectorDB] Failed to delete cache file:', error.message)
+  }
+  
+  console.log('[VectorDB] Vector cache cleared, will rebuild on next search')
 }
 
+/**
+ * 强制重建向量数据库
+ */
+export async function rebuildVectorDatabase() {
+  console.log('[VectorDB] Force rebuilding vector database...')
+  const data = await loadAndEnrichData()
+  await buildVectorDatabase(data, true)
+  return { success: true, chunkCount: vectorDB.length }
+}
+
+/**
+ * Max-Sim 向量搜索（多粒度切片聚合）
+ * 逻辑：
+ * 1. 计算 Query 与所有切片的相似度
+ * 2. 按 parentId 聚合，每个记录只保留最高分切片
+ * 3. 返回 Top-K 记录
+ */
 async function vectorSearch(query, topK = 5, withScores = false) {
   if (vectorDB.length === 0) {
     const data = await loadAndEnrichData()
@@ -154,16 +350,39 @@ async function vectorSearch(query, topK = 5, withScores = false) {
   }
 
   const queryEmbedding = await embedText(query)
-  const similarities = vectorDB.map(item => ({
-    item,
-    similarity: cosineSimilarity(queryEmbedding, item.embedding),
+  
+  // 步骤1：计算所有切片的相似度
+  const chunkScores = vectorDB.map(chunk => ({
+    chunk,
+    similarity: cosineSimilarity(queryEmbedding, chunk.vector)
   }))
 
-  similarities.sort((a, b) => b.similarity - a.similarity)
-  const top = similarities.slice(0, topK)
+  // 步骤2：Max-Sim 聚合（按 parentId 取最高分）
+  const recordMaxScores = new Map()
+  for (const { chunk, similarity } of chunkScores) {
+    const existing = recordMaxScores.get(chunk.parentId)
+    if (!existing || similarity > existing.similarity) {
+      recordMaxScores.set(chunk.parentId, {
+        parentId: chunk.parentId,
+        similarity,
+        bestChunk: chunk,
+        original: chunk.original
+      })
+    }
+  }
 
-  if (withScores) return top
-  return top.map(s => s.item.original)
+  // 步骤3：排序并返回 Top-K
+  const sortedRecords = Array.from(recordMaxScores.values())
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, topK)
+
+  console.log(`[VectorSearch] Max-Sim: scanned ${vectorDB.length} chunks -> aggregated to ${recordMaxScores.size} records -> top ${topK}`)
+  if (sortedRecords.length > 0) {
+    console.log(`[VectorSearch] Top result: score=${sortedRecords[0].similarity.toFixed(4)}, chunkType=${sortedRecords[0].bestChunk.type}`)
+  }
+
+  if (withScores) return sortedRecords
+  return sortedRecords.map(r => r.original)
 }
 
 // ==================== 辅助函数 ====================
@@ -245,21 +464,28 @@ export class SearchRecordsTool extends Tool {
   constructor() {
     super()
     this.name = 'search_records'
-    this.description = `语义内容检索工具（右脑 - 模糊搜索）【已增强 AI 元数据融合】:
-使用场景：
-- 情感/主题搜索："心情不好的记录"、"压力大的时候"、"开心的事情"
-- 相似内容发现："和XX项目类似的内容"、"关于学习的记录"
-- 关键词语义扩展："焦虑"（会匹配"紧张"、"压力大"等相似表达）
-- 模糊回忆："好像是做某个功能的时候..."（不记得确切项目名）
+    this.description = `语义内容检索工具（多粒度切片 + Max-Sim 检索）:
 
-AI 增强能力：
-- 自动匹配 AI 提取的情绪标签（mood_tags）
-- 精确查找实体（items）如书名、食物、地点
-- 利用 AI 摘要提升语义理解准确度
+核心能力：
+- 宏观理解：通过摘要、情绪、主题、人物、地点等元数据把握整体语义
+- 微观捕捉：通过滑窗切片算法精准匹配文本细节片段
+- Max-Sim检索：每条记录取最匹配切片得分，增强长文本中短句的匹配能力
+- 智能缓存：向量数据持久化，避免重复计算提升性能
+
+适用场景：
+- 情感搜索："心情不好"、"压力大"、"开心的事"
+- 细节回忆："那杯难喝的咖啡"、"和某某吃饭聊天"
+- 主题发现："关于工作的记录"、"运动健身相关"
+- 人物搜索："和朋友出去玩"、"同事讨论"
+- 地点场景："在健身房"、"咖啡厅"
+
+技术特性：
+- 宏观切片：融合 summary, mood_tags, items, people_involved, topics, location
+- 微观切片：滑窗大小150字符，重叠50字符
+- 向量缓存：自动检测数据变化，智能更新缓存
 
 注意：
-- 本工具使用向量语义搜索，擅长理解内容含义而非精确匹配
-- 如需精确条件查询（日期/项目/时长），请使用 query_records 工具
+- 如需精确条件查询（日期/项目），请使用 query_records 工具
 - 如需统计分析，请使用 sql_analysis 工具`
     
     this.schema = {
@@ -314,16 +540,16 @@ AI 增强能力：
       const candidatesMap = new Map()
       const keyOf = item => item._id || `${item.time || ''}_${item.shanggexiangmu || ''}_${item.ganshou || ''}`
 
-      const TOPK = 200
-      const SIM_THRESHOLD = 0.25
-      console.log('[SearchRecordsTool] Performing AI-enhanced vector semantic search for:', query)
+      const TOPK = 100  // Max-Sim 聚合后返回的记录数（不是切片数）
+      const SIM_THRESHOLD = 0.2  // 降低阈值，因为 Max-Sim 已经是最优匹配
+      console.log('[SearchRecordsTool] Performing Max-Sim multi-granularity vector search for:', query)
       try {
-        const sims = await vectorSearch(query, TOPK, true)
-        console.log(`[SearchRecordsTool] Vector search returned ${sims.length} semantic matches (TOPK=${TOPK})`)
+        const sims = await vectorSearch(query, TOPK, true)  // 返回的是记录级别的 Max-Sim 结果
+        console.log(`[SearchRecordsTool] Max-Sim search returned ${sims.length} records (aggregated from chunks)`)
         let passed = 0
         for (const s of sims) {
           if (s.similarity < SIM_THRESHOLD) continue
-          const it = s.item.original
+          const it = s.original
           const k = keyOf(it)
           candidatesMap.set(k, it)
           vecScores.set(k, s.similarity)
@@ -384,13 +610,17 @@ AI 增强能力：
         conditions: effectiveCond || null,
         dataCount,
         aiEnhancedCount,
+        chunkCount: vectorDB.length,
+        macroChunks: vectorDB.filter(c => c.type === 'macro').length,
+        microChunks: vectorDB.filter(c => c.type === 'micro').length,
         candidateCount: candidates.length,
         resultCountAfterRerank: results.length,
         maxResults: SEARCH_CONFIG.maxResults,
         vectorSearchCount: TOPK,
         similarityThreshold: SIM_THRESHOLD,
         lexicalTokenCount: tokens.length,
-        searchType: 'ai_enhanced_semantic_vector_hybrid'
+        searchType: 'max_sim_multi_granularity_chunking',
+        chunkingConfig: CHUNKING_CONFIG
       }
 
       console.log(`[SearchRecordsTool] Final debug info:`, debug)

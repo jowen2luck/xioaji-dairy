@@ -225,6 +225,18 @@ export class InsightAnalystTool extends Tool {
     try {
       switch (analysisType) {
         case 'emotion_energy_correlation':
+          // 优先使用增强版的 comparison 数据
+          if (result.comparison) {
+            const { avgDiff, diffPercent, positiveAdvantage, significance } = result.comparison
+            const sigText = significance === 'high' ? '显著' : significance === 'medium' ? '中等' : '轻微'
+            
+            if (positiveAdvantage) {
+              return `正面情绪的平均能量值 (${result.positive}) 比负面情绪 (${result.negative}) 高 ${avgDiff} 分，差异${sigText}。这表明积极情绪能显著提升能量水平。`
+            } else {
+              return `负面情绪的平均能量值 (${result.negative}) 反而比正面情绪 (${result.positive}) 高 ${Math.abs(avgDiff)} 分，可能存在"焦虑驱动"模式，建议关注压力管理。`
+            }
+          }
+          // 兼容旧格式
           if (result.positive !== null && result.negative !== null) {
             const diff = result.positive - result.negative
             if (diff > 1) {

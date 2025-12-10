@@ -424,12 +424,13 @@ export class SqlService {
   }
 
   /**
-   * 情绪与能量值关联分析
-   * 分析不同情绪类型（正面/负面）对应的平均能量值
+   * 情绪与能量值关联分析（增强版）
+   * 分析不同情绪类型（正面/负面/中性）对应的能量统计
+   * 返回：平均值、标准差、极值、分布等
    */
   analyzeEmotionEnergyCorrelation(data) {
     try {
-      console.log('[SqlService] Analyzing emotion-energy correlation...')
+      console.log('[SqlService] Analyzing emotion-energy correlation (enhanced)...')
       
       // 过滤出有完整 AI 元数据的记录
       const recordsWithAI = data.filter(r => 
@@ -448,10 +449,10 @@ export class SqlService {
       const positiveKeywords = ['满足', '开心', '愉快', '兴奋', '自豪', '成就感', '心流', '专注', '充实', '放松', '确幸', '温暖', '坚定']
       const negativeKeywords = ['焦虑', '沮丧', '难过', '失望', '孤独', '烦躁', '愤怒', '疲惫', '无奈', '挫败', '不安', '压力']
       
-      // 分组统计
-      const positive = { energySum: 0, count: 0 }
-      const negative = { energySum: 0, count: 0 }
-      const neutral = { energySum: 0, count: 0 }
+      // 分组收集能量值
+      const positive = { energyValues: [], count: 0 }
+      const negative = { energyValues: [], count: 0 }
+      const neutral = { energyValues: [], count: 0 }
       
       for (const record of recordsWithAI) {
         const moods = record._ai_meta.mood_tags
@@ -461,30 +462,81 @@ export class SqlService {
         const hasNegative = moods.some(m => negativeKeywords.includes(m))
         
         if (hasPositive && !hasNegative) {
-          positive.energySum += energy
+          positive.energyValues.push(energy)
           positive.count += 1
         } else if (hasNegative && !hasPositive) {
-          negative.energySum += energy
+          negative.energyValues.push(energy)
           negative.count += 1
         } else {
-          neutral.energySum += energy
+          neutral.energyValues.push(energy)
           neutral.count += 1
         }
       }
       
-      // 计算平均值
+      // 计算统计指标的辅助函数
+      const calculateStats = (values) => {
+        if (values.length === 0) return null
+        
+        const avg = values.reduce((sum, v) => sum + v, 0) / values.length
+        const max = Math.max(...values)
+        const min = Math.min(...values)
+        
+        // 计算标准差
+        const variance = values.reduce((sum, v) => sum + Math.pow(v - avg, 2), 0) / values.length
+        const stdDev = Math.sqrt(variance)
+        
+        return {
+          avg: Math.round(avg * 10) / 10,
+          stdDev: Math.round(stdDev * 10) / 10,
+          max,
+          min,
+          count: values.length
+        }
+      }
+      
+      const positiveStats = calculateStats(positive.energyValues)
+      const negativeStats = calculateStats(negative.energyValues)
+      const neutralStats = calculateStats(neutral.energyValues)
+      
+      // 计算对比指标
+      let comparison = null
+      if (positiveStats && negativeStats) {
+        const diff = positiveStats.avg - negativeStats.avg
+        const diffPercent = Math.round((diff / neutralStats?.avg || 5) * 100)
+        
+        comparison = {
+          avgDiff: Math.round(diff * 10) / 10,
+          diffPercent,
+          positiveAdvantage: diff > 0,
+          significance: Math.abs(diff) > 1 ? 'high' : Math.abs(diff) > 0.5 ? 'medium' : 'low'
+        }
+      }
+      
       const results = {
-        positive: positive.count > 0 ? Math.round((positive.energySum / positive.count) * 10) / 10 : null,
-        negative: negative.count > 0 ? Math.round((negative.energySum / negative.count) * 10) / 10 : null,
-        neutral: neutral.count > 0 ? Math.round((neutral.energySum / neutral.count) * 10) / 10 : null,
+        positive: positiveStats?.avg || null,
+        negative: negativeStats?.avg || null,
+        neutral: neutralStats?.avg || null,
         counts: {
           positive: positive.count,
           negative: negative.count,
           neutral: neutral.count
+        },
+        // 新增：详细统计
+        stats: {
+          positive: positiveStats,
+          negative: negativeStats,
+          neutral: neutralStats
+        },
+        // 新增：对比分析
+        comparison,
+        // 新增：样本质量指标
+        quality: {
+          totalSamples: recordsWithAI.length,
+          coverage: Math.round(((positive.count + negative.count + neutral.count) / recordsWithAI.length) * 100)
         }
       }
       
-      console.log(`[SqlService] Emotion-Energy correlation:`, results)
+      console.log(`[SqlService] Emotion-Energy correlation (enhanced):`, results)
       return results
     } catch (error) {
       console.error('[SqlService] Error in analyzeEmotionEnergyCorrelation:', error)
