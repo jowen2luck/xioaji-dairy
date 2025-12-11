@@ -73,10 +73,17 @@ export async function analyzeIntentWithLLM(userQuery, llm, history = []) {
       return analyzeIntentByKeywords(userQuery)
     }
     
+    // 【关键】确保 standalone_query 存在，如果 LLM 没有生成则使用原查询
+    if (!intentContext.standalone_query) {
+      intentContext.standalone_query = userQuery
+      console.log('[Intent] No standalone_query generated, using original query:', userQuery)
+    }
+    
     // 添加推荐的最大迭代次数
     intentContext.maxIterations = COMPLEXITY_MAX_ITERATIONS[intentContext.complexity] || 3
     
     console.log('[Intent] Structured intent context:', intentContext)
+    console.log('[Intent] standalone_query for execution:', intentContext.standalone_query)
     return intentContext
     
   } catch (error) {

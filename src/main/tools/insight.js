@@ -11,25 +11,15 @@ export class InsightAnalystTool extends Tool {
   constructor() {
     super()
     this.name = 'insight_analyst'
-    this.description = `深度洞察分析工具，挖掘数据背后的模式和关联：
-支持的分析类型：
-- emotion_energy_correlation: 情绪与能量值关联分析（正面/负面情绪对应的能量水平）
-- people_network: 人际关系网络分析（涉及人物频次）
-- biorhythm_stats: 生物节律统计（能量和专注度的时间分布）
-- psych_distribution: 心理需求分布（马斯洛需求层次）
-- temporal_stats: 时空取向统计（过去/现在/未来）
-- wisdom_archive: 智慧资产聚合（提取金句）
-- context_cloud: 物与境词云（地点和物品的高频词）
-- activity_calendar: 活动日历（按日期统计活跃度）
+    this.description = `深度模式识别与关联分析。
 
-高级参数：
-- filter_project: 限定在特定项目范围内分析
-- filter_date_range: 限定时间范围 {start: 'YYYY-MM-DD', end: 'YYYY-MM-DD'}
-- limit: 结果数量限制
-- dimension_x: 横向维度（如 mood_tags）
-- dimension_y: 纵向维度（如 energy_level）
+参数映射表:
+- activity_calendar -> params.filter_date_range (建议提供)
+- context_cloud -> params.limit
+- biorhythm_stats -> params.groupBy
+- 其他 -> 支持通用过滤 (filter_project, filter_date_range)
 
-注意：此工具专注于模式识别和深度洞察，基础统计请使用 sql_analysis 工具`
+注意：此工具计算量大，请勿在大范围无过滤条件下频繁调用。`
     
     this.schema = {
       type: 'object',
@@ -50,21 +40,21 @@ export class InsightAnalystTool extends Tool {
         },
         params: {
           type: 'object',
-          description: '分析参数（可选）',
+          description: '分析参数（根据 analysisType 不同）',
           properties: {
             filter_project: { type: 'string', description: '限定项目' },
             filter_date_range: { 
               type: 'object', 
-              description: '时间范围',
+              description: '时间范围(强制批量使用，以便载入易少)',
               properties: {
-                start: { type: 'string' },
-                end: { type: 'string' }
+                start: { type: 'string', description: 'ISO 日期' },
+                end: { type: 'string', description: 'ISO 日期' }
               }
             },
-            limit: { type: 'number', description: '结果数量限制' },
-            groupBy: { type: 'string', description: '时间分组方式（day/week/month）' },
-            dimension_x: { type: 'string', description: '横向维度字段' },
-            dimension_y: { type: 'string', description: '纵向维度字段' }
+            limit: { type: 'number', description: '结果数量限制(用于 context_cloud, wisdom_archive)' },
+            groupBy: { type: 'string', description: '时间分组方式(用于 biorhythm_stats: \'day\')\'week\')/\'month\')' },
+            dimension_x: { type: 'string', description: '横向维度字段(用于散点图)' },
+            dimension_y: { type: 'string', description: '纵向维度字段(用于散点图)' }
           }
         }
       },

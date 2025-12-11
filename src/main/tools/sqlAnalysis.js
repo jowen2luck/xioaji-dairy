@@ -8,30 +8,28 @@
 
 import { Tool, ToolResult } from './base.js'
 import { loadAndEnrichData, getSqlService } from '../data/index.js'
+import dayjs from '../../utils/date.js'
 
 export class SqlAnalysisTool extends Tool {
   constructor() {
     super()
     this.name = 'sql_analysis'
-    this.description = `执行基础统计分析（客观数据聚合）:
-基础统计：
-- summary: 总体统计摘要(记录数、项目数、总时长等)
-- by_project: 按项目分组统计(默认Top10)
-- by_time: 按时间段统计(上午/中午/下午/晚上/深夜)
-- weekday_weekend: 工作日vs周末对比
-- mood_trend: 情绪趋势(按月)
-- top_projects: 高频项目排行(默认Top5)
+    this.description = `执行基础统计分析。
 
-AI 元数据统计：
-- mood_distribution: 情绪标签分布统计（AI提取）
-- energy_trend: 能量值时间趋势分析（按周或月）
-- content_type_ratio: 内容体裁占比分析
-- life_composition: 生活重心统计（按内容类型）
+参数映射表 (AnalysisType -> Required Params):
+- summary → 无需 params
+- by_project → params.limit (可选)
+- by_time → 无需 params
+- weekday_weekend → 无需 params
+- mood_trend → 无需 params
+- top_projects → params.limit (可选)
+- mood_distribution → 无选 params
+- energy_trend → params.groupBy (必须。'week'/'month')
+- content_type_ratio → 无需 params
+- life_composition → 无需 params
+- general_aggregation → params.groupByField / params.timeUnit / params.metric / params.targetField
 
-注意:
-- 此工具专注于基础统计（计数、求和、平均值）
-- 深度洞察分析（相关性、归因、心理分析）请使用 insight_analyst 工具
-- 所有统计基于已加载的ETL清洗数据,包含_meta_和_ai_meta字段`
+注意：此工具专注于基础统计（计数、求和、平均值）。深度洞察分析（相关性、归因、心理分析）请使用 insight_analyst 工具。`
     this.schema = {
       type: 'object',
       properties: {
@@ -50,16 +48,23 @@ AI 元数据统计：
             'mood_distribution',
             'energy_trend',
             'content_type_ratio',
-            'life_composition'
+            'life_composition',
+            // 通用聚合
+            'general_aggregation'
           ],
         },
         params: {
           type: 'object',
-          description: '分析参数(可选)',
+          description: '分析参数（根据 analysisType 不同易有不同需求，详见 description 中的参数映射表）',
           properties: {
-            limit: { type: 'number', description: 'Top N 限制' },
-            dimension: { type: 'string', description: '分组维度字段' },
-            groupBy: { type: 'string', description: '时间分组方式(week/month)，仅用于 energy_trend' },
+            limit: { type: 'number', description: 'Top N 限制（用于 by_project, top_projects）' },
+            dimension: { type: 'string', description: '分组维度字段（用于 by_project）' },
+            groupBy: { type: 'string', description: '时间分组方式（用于 energy_trend: \'week\' or \'month\')。强优先使用 \'month\' 除非数据量严重不足' },
+            // 通用聚合参数
+            groupByField: { type: 'string', description: '分组字段, 支持嵌套如 _ai_meta.mood_tags' },
+            timeUnit: { type: 'string', description: '如果是时间统计，指定单位: day/week/month/year' },
+            metric: { type: 'string', enum: ['count', 'sum', 'avg'], description: '统计指标' },
+            targetField: { type: 'string', description: 'sum/avg 的目标字段' },
           },
         },
       },
@@ -76,7 +81,7 @@ AI 元数据统计：
       // 验证 analysisType
       const validTypes = [
         'summary', 'by_project', 'by_time', 'weekday_weekend', 'mood_trend', 'top_projects',
-        'mood_distribution', 'energy_trend', 'content_type_ratio', 'life_composition'
+        'mood_distribution', 'energy_trend', 'content_type_ratio', 'life_composition', 'general_aggregation'
       ]
       if (!validTypes.includes(analysisType)) {
         return new ToolResult(this.name, {
@@ -97,6 +102,11 @@ AI 元数据统计：
       }
 
       console.log(`[SqlAnalysisTool] Executing ${analysisType} on ${data.length} records`)
+
+      // 通用聚合优先处理
+      if (analysisType === 'general_aggregation') {
+        return this.performGenericAggregation(data, params)
+      }
 
       let result
 
@@ -169,5 +179,68 @@ AI 元数据统计：
       console.error('[SqlAnalysisTool] Error:', error)
       return new ToolResult(this.name, { error: error.message }, true)
     }
+  }
+
+  /**
+   * 通用聚合引擎
+   * 能够处理： "按项目统计平均能量值"、"按月份统计记录数" 等
+   */
+  performGenericAggregation(data, params) {
+    const { groupByField, timeUnit, metric = 'count', targetField, limit = 10 } = params
+    const groups = {}
+
+    data.forEach(item => {
+        let key = 'Unknown'
+        
+        // 1. 获取分组 Key
+        if (timeUnit && item.time) {
+            // Day.js 强大的时间格式化
+            key = dayjs(item.time).format(
+                timeUnit === 'year' ? 'YYYY' :
+                timeUnit === 'month' ? 'YYYY-MM' :
+                timeUnit === 'week' ? 'YYYY-[W]WW' : // ISO Week
+                'YYYY-MM-DD'
+            )
+        } else if (groupByField) {
+            // 支持深层属性访问 (e.g. _ai_meta.energy_level)
+            key = this.getNestedValue(item, groupByField) || 'Unknown'
+        }
+
+        // 处理数组类型的 Key (如 mood_tags)，这会导致一条记录归属多个组
+        const keys = Array.isArray(key) ? key : [key]
+
+        keys.forEach(k => {
+            if (!groups[k]) groups[k] = { count: 0, sum: 0, items: [] }
+            groups[k].count += 1
+            if (metric !== 'count' && targetField) {
+                const val = parseFloat(this.getNestedValue(item, targetField)) || 0
+                groups[k].sum += val
+            }
+        })
+    })
+
+    // 2. 计算结果
+    let result = Object.entries(groups).map(([key, stat]) => ({
+        group: key,
+        value: metric === 'avg' ? (stat.sum / stat.count).toFixed(2) :
+               metric === 'sum' ? stat.sum :
+               stat.count
+    }))
+
+    // 3. 排序与截断
+    result.sort((a, b) => parseFloat(b.value) - parseFloat(a.value))
+    if (limit) result = result.slice(0, limit)
+
+    return new ToolResult(this.name, {
+      analysisType: 'general_aggregation',
+      data: result,
+      recordCount: data.length,
+      params: params,
+    })
+  }
+
+  getNestedValue(obj, path) {
+    if (!path) return null
+    return path.split('.').reduce((o, k) => (o || {})[k], obj)
   }
 }

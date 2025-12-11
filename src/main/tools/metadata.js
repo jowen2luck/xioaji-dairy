@@ -11,23 +11,14 @@ export class MetadataExplorerTool extends Tool {
   constructor() {
     super()
     this.name = 'metadata_explorer'
-    this.description = `查询数据库中已存在的元数据（标签、人物、物品等），作为后续精确查询的参考。
-支持的字段类型：
-- people_involved: 涉及的人物
-- mood_tags: 情绪标签
-- items: 物品/工具
-- locations: 地点
-- projects: 项目名称
-- content_type: 内容类型（DailyLog/Reflection）
+    this.description = `【数据库目录/黄页】查询库中已存在的标准元数据值。
 
-可选参数：
-- search: 模糊匹配关键词
-- limit: 返回数量限制（默认10）
+关键作用：
+- 在使用 query_records 进行精确筛選前，必须先用此工具确认项目名、人名、标签名的准确写法。
+- 例如：用户说\"查查我和导师的记录\"，应先用此工具搜索 people_involved 中包含\"导师\"或\"老师\"的值，确认库里存的是\"张教授\"还是\"导师\"，然后再去 query_records 。
 
-使用场景：
-1. 用户提到"导师"，但不确定数据库中的准确标签是什么
-2. 想知道有哪些情绪标签可以筛选
-3. 查看记录了哪些项目`
+支持的字段：
+people_involved | mood_tags | items | locations | projects | content_type`
     
     this.schema = {
       type: 'object',
@@ -39,7 +30,7 @@ export class MetadataExplorerTool extends Tool {
         },
         search: {
           type: 'string',
-          description: '可选：模糊匹配关键词'
+          description: '模糊检索关键词。例如 field=\'people_involved\', search=\'\u8001\' 可找出 \'\u8001\u738b\', \'\u8001\u674e\'\u3002'
         },
         limit: {
           type: 'number',
@@ -71,7 +62,7 @@ export class MetadataExplorerTool extends Tool {
       
       switch (field) {
         case 'people_involved':
-          metadata = this.extractPeopleInvolved(data)
+          metadata = this.extractPeopleInvolved(data, limit)
           break
         case 'mood_tags':
           metadata = this.extractMoodTags(data)
@@ -123,26 +114,59 @@ export class MetadataExplorerTool extends Tool {
   }
 
   /**
-   * 提取涉及的人物（从 AI 元数据）
+   * 增强版：提取人物及其关联上下文
    */
-  extractPeopleInvolved(data) {
+  extractPeopleInvolved(data, limit = 10) {
     const peopleMap = new Map()
     
     data.forEach(record => {
       const aiMeta = record._ai_meta
-      if (aiMeta && Array.isArray(aiMeta.people_involved)) {
-        aiMeta.people_involved.forEach(person => {
-          if (person && person.trim()) {
-            const key = person.trim()
-            peopleMap.set(key, (peopleMap.get(key) || 0) + 1)
-          }
-        })
-      }
+      if (!aiMeta || !Array.isArray(aiMeta.people_involved)) return
+      
+      aiMeta.people_involved.forEach(person => {
+        const p = person.trim()
+        if (!p) return
+        
+        if (!peopleMap.has(p)) {
+          peopleMap.set(p, { 
+            count: 0, 
+            projects: new Map(), // 关联项目计数
+            moods: new Map()     // 关联情绪计数
+          })
+        }
+        
+        const entry = peopleMap.get(p)
+        entry.count++
+        
+        // 统计关联项目
+        const proj = record._meta_project || record.project
+        if (proj) entry.projects.set(proj, (entry.projects.get(proj) || 0) + 1)
+        
+        // 统计关联情绪
+        if (aiMeta.mood_tags) {
+          aiMeta.mood_tags.forEach(m => 
+            entry.moods.set(m, (entry.moods.get(m) || 0) + 1)
+          )
+        }
+      })
     })
     
+    // 格式化输出
     return Array.from(peopleMap.entries())
-      .map(([value, count]) => ({ value, count }))
-      .sort((a, b) => b.count - a.count)
+      .sort((a, b) => b[1].count - a[1].count)
+      .slice(0, limit)
+      .map(([person, info]) => ({
+        value: person,
+        count: info.count,
+        // 计算 Top 1 关联
+        top_project: this.getTopKey(info.projects),
+        top_mood: this.getTopKey(info.moods)
+      }))
+  }
+
+  getTopKey(map) {
+    if (map.size === 0) return null
+    return [...map.entries()].sort((a, b) => b[1] - a[1])[0][0]
   }
 
   /**

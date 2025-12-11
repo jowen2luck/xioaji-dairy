@@ -158,11 +158,38 @@ export function registerIPCHandlers(config = {}) {
         top_p: userConfig?.top_p ?? 0.9,
       })
 
+      // 【关键修改】"吸星大法" - 构造干净的消息列表
+      // 意图分析器已经从历史中"吸收"了营养（指代消解、实体提取等）
+      // 现在我们切断历史，只给 Executor 重写后的独立查询
+      let standaloneQuery = userQuery // 默认使用原查询
+      if (intentContext?.standalone_query) {
+        standaloneQuery = intentContext.standalone_query
+        console.log('[IPC:chat] Query rewritten:', userQuery, '->', standaloneQuery)
+      }
+
+      // 构造给 Executor 的"干净"消息列表
+      // 【核心】不传递完整的历史记录，而是：
+      // - 仅包含当前的独立查询
+      // - 这样 Executor "看不到"之前的对话，必须调用工具获取信息
+      // - Token 消耗从 O(n) 降低到 O(1)，避免"偷懒"现象
+      const executorMessages = [
+        // 注意：System Prompt 会在 Executor.formatMessages() 中自动添加
+        // 这里只需传递当前的用户查询
+        { role: 'user', content: standaloneQuery }
+      ]
+
+      console.log('[IPC:chat] Executor will receive:',{
+        messageCount: executorMessages.length,
+        standaloneQuery,
+        hasHistory: false,
+        note: '历史已切断，只有独立查询'
+      })
+
       // 执行代理（传入意图上下文）
       const result = await executor.execute({
-        messages, // 直接使用前端发送的消息（已包含 system prompt）
+        messages: executorMessages, // <--- 传入干净的消息列表（已切断历史）
         systemPrompt: '', // 不重复添加 system prompt
-        userQuery,
+        userQuery: standaloneQuery, // <--- 使用重写后的查询
         enabledTools: intentTools.length > 0 ? intentTools : enabledToolNames,
         maxIterations: intentContext?.maxIterations || 3,  // 使用意图推荐的迭代次数
         intentContext  // 传入结构化意图上下文

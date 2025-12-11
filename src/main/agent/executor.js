@@ -373,9 +373,10 @@ export class AgentExecutor {
 你是一个智能日记助手。
 
 【核心原则】
-1. **时间严谨性**：如果用户提到相对时间（如“上周”、“昨天”、“最近”），**必须第一步调用 calendar_resolver 工具**获取精确的 ISO 日期范围。严禁自己估算日期。
+1. **时间严谨性**：如果用户提到相对时间（如"上周"、"昨天"、"最近"），**必须第一步调用 calendar_resolver 工具**获取精确的 ISO 日期范围。严禁自己估算日期。
 2. **循序渐进**：不要尝试在一个步骤中完成所有操作。先获取时间/元数据，拿到结果后再调用查询工具。
 3. **工具依赖**：不要编造数据，所有分析必须基于 sql_analysis 或 query_records 的返回结果。
+4. **禁止偷懒**：即使在消息历史中看不到前文提及的内容，也不要自己编造。立即调用工具。
 `
 
     // 添加系统提示词
@@ -388,8 +389,17 @@ export class AgentExecutor {
       })
     }
 
-    // 添加其他消息
+    // 【关键】直接添加传入的消息
+    // 注意：由于 IPC 层已经切断了历史，这里的 messages 通常只有 1-2 条
+    // 这个干净的消息列表确保 LLM 必须调用工具来获取信息
     formatted.push(...messages)
+
+    console.log('[AgentExecutor] formatMessages result:', {
+      totalMessages: formatted.length,
+      hasSystem: formatted.some(m => m.role === 'system'),
+      userMessages: formatted.filter(m => m.role === 'user').length,
+      structure: formatted.map(m => `${m.role}(${m.content?.slice(0, 30)}...)`)
+    })
 
     return formatted
   }

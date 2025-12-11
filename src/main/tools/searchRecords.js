@@ -13,12 +13,13 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import crypto from 'crypto'
+import dayjs from '../../utils/date.js'
 
 // ==================== 配置与缓存路径 ====================
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
-const CACHE_FILE_PATH = path.join(__dirname, '..', '.cache', 'vector_db_cache.json')
+const CACHE_FILE_PATH = path.join(__dirname, '..', '.cache', 'vector_db_incremental.json')
 
 const CHUNKING_CONFIG = {
   microWindowSize: 150,  // 微观切片窗口大小（字符）
@@ -196,115 +197,89 @@ function generateChunksForRecord(item) {
 }
 
 /**
- * 计算数据指纹（用于缓存失效检测）
+ * 计算单条记录的内容指纹 (Hash)
+ * 仅包含会影响向量生成的字段
  */
-function computeDataFingerprint(data) {
-  const summary = {
-    count: data.length,
-    lastModified: Math.max(...data.map(item => {
-      const time = item.time || item._meta_updated || ''
-      return new Date(time).getTime() || 0
-    }))
-  }
-  return crypto.createHash('md5').update(JSON.stringify(summary)).digest('hex')
+function computeItemHash(item) {
+  const content = JSON.stringify({
+    id: item._meta_id || item.time,
+    text: item._meta_plain_text,
+    ai: item._ai_meta,
+    summary: item.ganshou + item.shanggexiangmu
+  })
+  return crypto.createHash('md5').update(content).digest('hex')
 }
 
 /**
- * 加载向量数据库缓存
+ * 核心：增量构建向量库
+ * 避免全量重建，仅处理变更数据
  */
-function loadVectorCache() {
+async function syncVectorDatabase(currentData) {
+  // 1. 加载旧缓存
+  let cacheStore = {}
   try {
-    if (!fs.existsSync(CACHE_FILE_PATH)) {
-      console.log('[VectorDB] Cache file not found, will build new database')
-      return null
+    if (fs.existsSync(CACHE_FILE_PATH)) {
+      cacheStore = JSON.parse(fs.readFileSync(CACHE_FILE_PATH, 'utf-8'))
     }
-
-    const cacheData = JSON.parse(fs.readFileSync(CACHE_FILE_PATH, 'utf-8'))
-    console.log(`[VectorDB] Cache loaded: ${cacheData.chunks?.length || 0} chunks, fingerprint: ${cacheData.fingerprint}`)
-    return cacheData
-  } catch (error) {
-    console.error('[VectorDB] Failed to load cache:', error.message)
-    return null
-  }
-}
-
-/**
- * 保存向量数据库缓存
- */
-function saveVectorCache(chunks, fingerprint) {
-  try {
-    const cacheDir = path.dirname(CACHE_FILE_PATH)
-    if (!fs.existsSync(cacheDir)) {
-      fs.mkdirSync(cacheDir, { recursive: true })
-    }
-
-    const cacheData = {
-      fingerprint,
-      timestamp: new Date().toISOString(),
-      chunkCount: chunks.length,
-      chunks: chunks.map(chunk => ({
-        id: chunk.id,
-        parentId: chunk.parentId,
-        text: chunk.text,
-        type: chunk.type,
-        vector: chunk.vector
-      }))
-    }
-
-    fs.writeFileSync(CACHE_FILE_PATH, JSON.stringify(cacheData, null, 2), 'utf-8')
-    console.log(`[VectorDB] Cache saved: ${chunks.length} chunks written to ${CACHE_FILE_PATH}`)
-  } catch (error) {
-    console.error('[VectorDB] Failed to save cache:', error.message)
-  }
-}
-
-/**
- * 构建向量数据库（扁平化切片结构）
- */
-async function buildVectorDatabase(data, forceRebuild = false) {
-  const fingerprint = computeDataFingerprint(data)
-
-  // 尝试加载缓存
-  if (!forceRebuild) {
-    const cache = loadVectorCache()
-    if (cache && cache.fingerprint === fingerprint) {
-      console.log('[VectorDB] Using cached vectors (fingerprint matched)')
-      vectorDB = cache.chunks.map(chunk => ({
-        ...chunk,
-        original: data.find(item => {
-          const id = item._meta_id || item._id || `${item.time || ''}_${item.shanggexiangmu || ''}_${item.ganshou || ''}`
-          return id === chunk.parentId
-        })
-      }))
-      return
-    }
+  } catch (e) {
+    console.warn('[VectorDB] Cache corrupted, starting fresh.')
   }
 
-  // 构建新的向量数据库
-  console.log('[VectorDB] Building new vector database with multi-granularity chunking...')
-  vectorDB = []
-  let macroCount = 0
-  let microCount = 0
-
-  for (const item of data) {
-    const chunks = generateChunksForRecord(item)
-    
-    for (const chunk of chunks) {
-      const vector = await embedText(chunk.text)
-      vectorDB.push({
-        ...chunk,
-        vector
-      })
-
-      if (chunk.type === 'macro') macroCount++
-      else if (chunk.type === 'micro') microCount++
-    }
-  }
-
-  console.log(`[VectorDB] Built ${vectorDB.length} chunks (${macroCount} macro + ${microCount} micro) from ${data.length} records`)
+  const newCacheStore = {} // 构建新的缓存对象（未出现在 currentData 的旧 key 会自动被丢弃，实现删除逻辑）
+  let reuseCount = 0
+  let newCount = 0
   
-  // 保存缓存
-  saveVectorCache(vectorDB, fingerprint)
+  // 2. 扁平化的运行时向量列表 (用于搜索)
+  const runtimeVectorDB = []
+
+  console.log(`[VectorDB] Syncing ${currentData.length} records...`)
+
+  for (const item of currentData) {
+    // 确保有唯一ID (fallback: time + title)
+    const itemId = item._meta_id || `${item.time}_${item.shanggexiangmu}`
+    const currentHash = computeItemHash(item)
+    
+    // Check Cache
+    if (cacheStore[itemId] && cacheStore[itemId].hash === currentHash) {
+      // A. 命中缓存：直接复用
+      newCacheStore[itemId] = cacheStore[itemId]
+      
+      // 恢复 chunk 里的 original 引用 (因为 JSON 不存对象引用)
+      cacheStore[itemId].chunks.forEach(chunk => {
+        chunk.original = item // 重新挂载内存对象
+        runtimeVectorDB.push(chunk)
+      })
+      reuseCount++
+    } else {
+      // B. 未命中/已修改：重新生成
+      const chunks = generateChunksForRecord(item)
+      
+      // 并行计算向量
+      for (const chunk of chunks) {
+        chunk.vector = await embedText(chunk.text)
+        runtimeVectorDB.push(chunk)
+      }
+
+      // 存入新缓存结构 (不存 original 对象，减小体积)
+      newCacheStore[itemId] = {
+        hash: currentHash,
+        chunks: chunks.map(c => ({ ...c, original: undefined })) 
+      }
+      newCount++
+    }
+  }
+
+  // 3. 持久化新缓存
+  try {
+    const dir = path.dirname(CACHE_FILE_PATH)
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(CACHE_FILE_PATH, JSON.stringify(newCacheStore), 'utf-8')
+    console.log(`[VectorDB] Sync complete. Reused: ${reuseCount}, New/Updated: ${newCount}. Cache saved.`)
+  } catch (e) {
+    console.error('[VectorDB] Failed to save cache:', e)
+  }
+
+  return runtimeVectorDB
 }
 
 /**
@@ -332,7 +307,7 @@ export function clearVectorCache() {
 export async function rebuildVectorDatabase() {
   console.log('[VectorDB] Force rebuilding vector database...')
   const data = await loadAndEnrichData()
-  await buildVectorDatabase(data, true)
+  vectorDB = await syncVectorDatabase(data)
   return { success: true, chunkCount: vectorDB.length }
 }
 
@@ -346,7 +321,7 @@ export async function rebuildVectorDatabase() {
 async function vectorSearch(query, topK = 5, withScores = false) {
   if (vectorDB.length === 0) {
     const data = await loadAndEnrichData()
-    await buildVectorDatabase(data)
+    vectorDB = await syncVectorDatabase(data)
   }
 
   const queryEmbedding = await embedText(query)
@@ -464,52 +439,44 @@ export class SearchRecordsTool extends Tool {
   constructor() {
     super()
     this.name = 'search_records'
-    this.description = `语义内容检索工具（多粒度切片 + Max-Sim 检索）:
+    this.description = `【语义检索/模糊回忆专用】基于向量的语义搜索引擎。
 
 核心能力：
-- 宏观理解：通过摘要、情绪、主题、人物、地点等元数据把握整体语义
-- 微观捕捉：通过滑窗切片算法精准匹配文本细节片段
-- Max-Sim检索：每条记录取最匹配切片得分，增强长文本中短句的匹配能力
-- 智能缓存：向量数据持久化，避免重复计算提升性能
+- 能够理解\"心情不好\"、\"压力大\"等抽象概念，也能检索\"青旅\"、\"咖啡\"等具体意象
+- 采用 Max-Sim 多粒度切片算法，对长文本中的碎片记忆检索效果极佳
 
-适用场景：
-- 情感搜索："心情不好"、"压力大"、"开心的事"
-- 细节回忆："那杯难喝的咖啡"、"和某某吃饭聊天"
-- 主题发现："关于工作的记录"、"运动健身相关"
-- 人物搜索："和朋友出去玩"、"同事讨论"
-- 地点场景："在健身房"、"咖啡厅"
+⚠️ 调用前必读：
+1. 【关键词提取】禁止将\"帮我找一下...\"等整句作为 query。请先提取 2-3 个核心意象词（如\"青旅 窗边 雨\"）。
+2. 【时间约束】如果用户提到\"上周\"、\"最近\"等时间，必须先调用 calendar_resolver 获取 ISO 时间，并填入 conditions.dateRange。不要忽略时间条件！
+3. 【排他性】如果用户明确要找\"项目A\"或\"包含'代码'二字\"的记录，请改用 query_records。
 
-技术特性：
+技术细节（仅供参考）：
 - 宏观切片：融合 summary, mood_tags, items, people_involved, topics, location
 - 微观切片：滑窗大小150字符，重叠50字符
-- 向量缓存：自动检测数据变化，智能更新缓存
-
-注意：
-- 如需精确条件查询（日期/项目），请使用 query_records 工具
-- 如需统计分析，请使用 sql_analysis 工具`
+- Max-Sim 聚合：每条记录取最匹配切片得分，增强长文本中短句的匹配能力`
     
     this.schema = {
       type: 'object',
       properties: {
         query: {
           type: 'string',
-          description: '语义搜索关键词（例如："压力大"、"开心的事"、"项目进展慢"）',
+          description: '核心意象/概念关键词（空格分隔）。例：\"焦虑 答辩\" 或 \"海边 烧烤\"。请去除无意义的虚词。'
         },
         conditions: {
           type: 'object',
-          description: '可选的后置过滤条件。支持时间范围和情绪过滤。高级用法：在模糊回忆场景下，可先调用 calendar_resolver 获取日期范围，然后传入此参数',
+          description: '后置过滤条件（用于缩小语义搜索的范围）',
           properties: {
             dateRange: {
               type: 'object',
-              description: '日期范围后置过滤（可选）。用于在语义搜索结果中进一步按时间过滤',
+              description: '【强制】若用户指定时间，必须填此项。格式需由 calendar_resolver 生成。',
               properties: {
-                start: { type: 'string', description: '开始日期 YYYY-MM-DD' },
-                end: { type: 'string', description: '结束日期 YYYY-MM-DD' }
+                start: { type: 'string', description: 'YYYY-MM-DD HH:mm:ss' },
+                end: { type: 'string', description: 'YYYY-MM-DD HH:mm:ss' }
               }
             },
             emotionFocus: {
               type: 'string',
-              description: '情绪倾向过滤，可选值: worst（偏向负面情绪）',
+              description: '情绪倾向过滤（可选），可选值: worst（偏向负面情绪）',
             },
           },
         },
@@ -565,18 +532,17 @@ export class SearchRecordsTool extends Tool {
         console.log('[SearchRecordsTool] Applying post-filter conditions:', effectiveCond)
         const candidates = Array.from(candidatesMap.values())
         const filtered = candidates.filter(item => {
-          // 日期范围过滤
+          // 日期范围过滤 (Day.js 改造)
           if (effectiveCond.dateRange) {
+            const { start, end } = effectiveCond.dateRange
+            // 使用 dayjs 进行严谨比较
+            const startDate = start ? dayjs(start).startOf('day') : null
+            const endDate = end ? dayjs(end).endOf('day') : null
+            
             if (item.time) {
-              const itemDate = new Date(item.time)
-              if (effectiveCond.dateRange.start) {
-                if (itemDate < new Date(effectiveCond.dateRange.start)) return false
-              }
-              if (effectiveCond.dateRange.end) {
-                const endDate = new Date(effectiveCond.dateRange.end)
-                endDate.setHours(23, 59, 59, 999)
-                if (itemDate > endDate) return false
-              }
+              const itemTime = dayjs(item.time)
+              if (startDate && itemTime.isBefore(startDate)) return false
+              if (endDate && itemTime.isAfter(endDate)) return false
             } else {
               return false
             }

@@ -32,6 +32,11 @@ AI 增强查询（新增）：
 - 体裁筛选："所有深度反思类记录"
 - 智慧筛选："包含金句的记录"
 
+关键词查询策略：
+- 当用户查询的概念可能有多种表达时（如"交通"），请使用 keywordsAny: ["公交", "地铁", "打车", "开车"]。
+- 当需要精确定位特定事件时（如"和老板吃饭"），请结合使用 keywordsAll: ["老板", "吃饭"]。
+- 如果想要过滤掉无关记录（如找"吃药"但不想看"吃饭"），请使用 keywordsExclude: ["饭", "餐"]。
+
 注意：
 - 本工具仅支持精确条件匹配，不做模糊语义搜索
 - 如需搜索内容相似性，请使用 search_records 工具
@@ -43,15 +48,15 @@ AI 增强查询（新增）：
         // 基础维度查询
         dateRange: {
           type: 'object',
-          description: '日期范围（基于 time 字段）',
+          description: '【强制】时间范围。必须使用 calendar_resolver 解析后的 ISO 日期。',
           properties: {
-            start: { type: 'string', description: '开始日期 YYYY-MM-DD' },
-            end: { type: 'string', description: '结束日期 YYYY-MM-DD' }
+            start: { type: 'string', description: '开始 ISO 日期' },
+            end: { type: 'string', description: '结束 ISO 日期' }
           }
         },
         project: {
           type: 'string',
-          description: '项目名称（模糊匹配 shanggexiangmu 字段）'
+          description: '项目精确名称。如不确定，请先调用 metadata_explorer 查询库中存在的项目名。'
         },
         weekday: {
           type: 'string',
@@ -73,9 +78,20 @@ AI 增强查询（新增）：
           type: 'number',
           description: '最大持续时间（分钟，使用 _meta_duration_min 字段）'
         },
-        contentKeyword: {
-          type: 'string',
-          description: '内容关键词（⚠️仅限精确匹配单词或短语，如"开心"、"项目A"）。如果用户输入的是长句子或模糊描述（如"好像写到了..."），严禁使用此字段，请改用 search_records 工具进行语义检索！'
+        keywordsAny: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '目标文本中只要包含数组中的任意一个词，即视为匹配（逻辑 OR）。场景：同义词检索。示例：["吃", "餐", "饭"]'
+        },
+        keywordsAll: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '目标文本中必须同时包含数组中的所有词，才视为匹配（逻辑 AND）。场景：限定特定上下文。示例：["项目A", "会议"]'
+        },
+        keywordsExclude: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '目标文本中如果包含数组中的任意一个词，则排除该记录（逻辑 NOT）。场景：排除干扰项。示例：["不吃", "没吃"]'
         },
         
         // AI 元数据维度查询（新增）
@@ -178,14 +194,31 @@ AI 增强查询（新增）：
           match = match && (item._meta_duration_min || 0) <= input.durationMax
         }
 
-        // 7. 内容关键词（简单包含匹配）
-        if (input.contentKeyword && match) {
-          const keyword = input.contentKeyword.toLowerCase()
-          const text = [item.ganshou, item.shanggexiangmu, item.chixushijian]
+        // 7. 内容关键词结构化匹配 (keywordsAny, keywordsAll, keywordsExclude)
+        if (match) {
+          // 合并所有文本字段用于关键词匹配
+          const text = [item.ganshou, item.shanggexiangmu, item.chixushijian, item.summary]
             .filter(Boolean)
             .join(' ')
             .toLowerCase()
-          match = match && text.includes(keyword)
+
+          // OR 逻辑检查 (keywordsAny)
+          if (input.keywordsAny && input.keywordsAny.length > 0) {
+            const hasAny = input.keywordsAny.some(kw => text.includes(kw.toLowerCase()));
+            if (!hasAny) match = false;
+          }
+
+          // AND 逻辑检查 (keywordsAll)
+          if (match && input.keywordsAll && input.keywordsAll.length > 0) {
+            const hasAll = input.keywordsAll.every(kw => text.includes(kw.toLowerCase()));
+            if (!hasAll) match = false;
+          }
+
+          // NOT 逻辑检查 (keywordsExclude)
+          if (match && input.keywordsExclude && input.keywordsExclude.length > 0) {
+            const hasForbidden = input.keywordsExclude.some(kw => text.includes(kw.toLowerCase()));
+            if (hasForbidden) match = false;
+          }
         }
 
         // ==================== AI 元数据维度过滤（新增） ====================
