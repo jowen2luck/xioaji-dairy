@@ -24,13 +24,14 @@
       <!-- 1. 头部：类型 + 时间 + 核心指标 -->
       <div class="card-header">
         <div class="header-left">
+          <!-- Both modes show the same content, time editing is in header-right -->
           <span class="type-label">{{ getContentTypeLabel(meta.content_type) }}</span>
           <span class="divider">·</span>
           <span class="time-text">{{ formatTime(record.time) }}</span>
           
           <!-- 领域标签 (仅在非生活类显示，避免信息过噪) -->
           <n-tag 
-            v-if="meta.primary_domain && meta.primary_domain !== 'LifeLog'" 
+            v-if="meta.primary_domain && meta.primary_domain !== 'LifeLog' && !isEditing" 
             size="tiny" 
             round 
             :bordered="false" 
@@ -41,43 +42,116 @@
         </div>
 
         <div class="header-right">
-          <!-- 能量 & 专注 (简化版：仅图标+数字) -->
-          <div v-if="typeof meta.energy_level === 'number'" class="stat-pill" title="能量水平">
-            <n-icon :component="FlashOutline" :color="getEnergyColor(meta.energy_level)"/>
-            <span class="stat-num">{{ meta.energy_level }}</span>
-          </div>
-          <div v-if="typeof meta.focus_level === 'number'" class="stat-pill" title="专注程度">
-            <n-icon :component="EyeOutline" class="focus-icon"/>
-            <span class="stat-num">{{ meta.focus_level }}</span>
-          </div>
+          <!-- Edit Mode: Time Input -->
+          <n-date-picker
+            v-if="isEditing"
+            v-model:value="editForm.time"
+            type="datetime"
+            size="small"
+            format="yyyy-MM-dd HH:mm"
+            style="width: 180px"
+          />
+          <!-- View Mode -->
+          <template v-else>
+            <!-- 能量 & 专注 (简化版：仅图标+数字) -->
+            <div v-if="typeof meta.energy_level === 'number'" class="stat-pill" title="能量水平">
+              <n-icon :component="FlashOutline" :color="getEnergyColor(meta.energy_level)"/>
+              <span class="stat-num">{{ meta.energy_level }}</span>
+            </div>
+            <div v-if="typeof meta.focus_level === 'number'" class="stat-pill" title="专注程度">
+              <n-icon :component="EyeOutline" class="focus-icon"/>
+              <span class="stat-num">{{ meta.focus_level }}</span>
+            </div>
+          </template>
+          
+          <!-- Edit Toggle Button -->
+          <n-button
+            v-if="!isEditing"
+            text
+            size="small"
+            @click="startEdit"
+            title="Edit Record"
+          >
+            <template #icon>
+              <n-icon :component="CreateOutline" />
+            </template>
+          </n-button>
+          
+          <!-- Edit Action Buttons -->
+          <template v-else>
+            <n-button
+              text
+              size="small"
+              @click="cancelEdit"
+              :disabled="isSaving"
+              title="Cancel"
+            >
+              <template #icon>
+                <n-icon :component="CloseOutline" />
+              </template>
+            </n-button>
+            <n-button
+              type="primary"
+              size="small"
+              @click="saveEdit"
+              :loading="isSaving"
+              title="Save"
+            >
+              <template #icon>
+                <n-icon :component="CheckmarkOutline" />
+              </template>
+            </n-button>
+          </template>
         </div>
       </div>
 
-      <!-- 2. AI 摘要 (作为导语存在) -->
-      <div v-if="meta.summary" class="summary-section">
+      <!-- 2. AI Summary (edit mode or display mode) -->
+      <div v-if="meta.summary || isEditing" class="summary-section">
         <n-icon :component="SparklesOutline" class="summary-icon" />
-        <span class="summary-text">{{ meta.summary }}</span>
+        <n-input
+          v-if="isEditing"
+          v-model:value="editForm.summary"
+          type="textarea"
+          placeholder="AI Summary"
+          :autosize="{ minRows: 1, maxRows: 3 }"
+          :disabled="isSaving"
+          style="flex: 1"
+        />
+        <span v-else class="summary-text">{{ meta.summary }}</span>
       </div>
 
       <!-- 3. 主内容区 (有内容才显示，无内容直接隐藏) -->
-      <div v-if="hasContent" class="content-body">
-        <!-- Markdown 正文 -->
-        <MarkdownRenderer :content="record.ganshou" class="markdown-content" />
-        
-        <!-- 金句展示 -->
-        <div v-if="showQuotes && meta.key_quotes?.length" class="quotes-section">
-          <div v-for="(quote, idx) in meta.key_quotes.slice(0, 2)" :key="idx" class="quote-item">
-            {{ quote }}
+      <div v-if="hasContent || isEditing" class="content-body">
+        <!-- Edit Mode: Textarea -->
+        <n-input
+          v-if="isEditing"
+          v-model:value="editForm.ganshou"
+          type="textarea"
+          placeholder="Edit content..."
+          :autosize="{ minRows: 4, maxRows: 20 }"
+          :disabled="isSaving"
+          class="edit-textarea"
+        />
+        <!-- View Mode: Markdown -->
+        <template v-else>
+          <!-- Markdown 正文 -->
+          <MarkdownRenderer :content="record.ganshou" class="markdown-content" />
+          
+          <!-- 金句展示 -->
+          <div v-if="showQuotes && meta.key_quotes?.length" class="quotes-section">
+            <div v-for="(quote, idx) in meta.key_quotes.slice(0, 2)" :key="idx" class="quote-item">
+              {{ quote }}
+            </div>
           </div>
-        </div>
 
-        <!-- 待办事项 (Next Steps) -->
-        <div v-if="meta.next_steps?.length" class="next-steps">
-          <div class="section-title-mini">OPEN LOOPS</div>
-          <div v-for="(step, idx) in meta.next_steps" :key="idx" class="step-row">
-            <span class="checkbox">☐</span> {{ step }}
+          <!-- 待办事项 (Next Steps) -->
+          <div v-if="meta.next_steps?.length" class="next-steps">
+            <div class="section-title-mini">OPEN LOOPS</div>
+            <div v-for="(step, idx) in meta.next_steps" :key="idx" class="step-row">
+              <span class="checkbox">☐</span> {{ step }}
+            </div>
           </div>
-        </div>
+        </template>
       </div>
 
       <!-- 4. 情绪与洞察 (即使无正文，此区域也重点展示) -->
@@ -137,34 +211,163 @@
 
       <!-- 6. 统一底部信息栏 (Metadata Footer) -->
       <div class="card-footer">
-        <div class="footer-scroll-area">
-          <!-- 物理场景 -->
-          <span v-if="meta.location" class="footer-meta">
-            <n-icon :component="LocationOutline" /> {{ meta.location }}
-          </span>
-          <!-- 人物 -->
-          <span v-for="p in (meta.people_involved || []).slice(0, 3)" :key="p" class="footer-meta person" @click="$emit('tag-click', 'person', p)">
-            @{{ p }}
-          </span>
-          <!-- 交互 -->
-          <span v-if="meta.interaction_type && meta.interaction_type !== 'Solo'" class="footer-meta">
-             {{ getInteractionLabel(meta.interaction_type) }}
-          </span>
-          <!-- 物品 -->
-          <span v-for="i in displayedItems" :key="i" class="footer-meta item" @click="$emit('tag-click', 'item', i)">
-            #{{ i }}
-          </span>
-          <!-- 生理感受 -->
-          <span v-if="meta.physiological_sensations?.length" class="footer-meta physio">
-            <n-icon :component="BodyOutline" /> {{ meta.physiological_sensations[0] }}
-          </span>
+        <!-- Edit Mode: Additional Fields -->
+        <div v-if="isEditing" class="edit-footer">
+          <!-- Row 1: Energy & Focus -->
+          <div class="edit-section">
+            <div class="edit-field-row">
+              <span class="edit-label">Energy (1-10):</span>
+              <n-input-number 
+                v-model:value="editForm.energy_level" 
+                :min="1" 
+                :max="10"
+                size="small"
+                style="width: 100px"
+              />
+            </div>
+            <div class="edit-field-row">
+              <span class="edit-label">Focus (1-10):</span>
+              <n-input-number 
+                v-model:value="editForm.focus_level" 
+                :min="1" 
+                :max="10"
+                size="small"
+                style="width: 100px"
+              />
+            </div>
+            <div class="edit-field-row">
+              <span class="edit-label">Location:</span>
+              <n-input 
+                v-model:value="editForm.location" 
+                placeholder="e.g., Office, Home" 
+                size="small"
+                style="width: 150px"
+              />
+            </div>
+          </div>
+          
+          <!-- Row 2: Key Quotes -->
+          <div class="edit-section">
+            <div class="edit-section-header">
+              <span class="edit-label">Key Quotes:</span>
+              <n-button text size="tiny" @click="addArrayItem('key_quotes')">
+                <n-icon :component="AddOutline" />
+              </n-button>
+            </div>
+            <div v-for="(quote, idx) in editForm.key_quotes" :key="'quote-'+idx" class="array-item-row">
+              <n-input 
+                v-model:value="editForm.key_quotes[idx]" 
+                size="small"
+                placeholder="Quote text"
+                style="flex: 1"
+              />
+              <n-button text size="tiny" @click="removeArrayItem('key_quotes', idx)">
+                <n-icon :component="TrashOutline" />
+              </n-button>
+            </div>
+          </div>
+          
+          <!-- Row 3: People -->
+          <div class="edit-section">
+            <div class="edit-section-header">
+              <span class="edit-label">People:</span>
+              <n-button text size="tiny" @click="addArrayItem('people_involved')">
+                <n-icon :component="AddOutline" />
+              </n-button>
+            </div>
+            <div class="array-tags-row">
+              <div v-for="(person, idx) in editForm.people_involved" :key="'person-'+idx" class="array-tag-item">
+                <n-input 
+                  v-model:value="editForm.people_involved[idx]" 
+                  size="tiny"
+                  placeholder="Name"
+                  style="width: 80px"
+                />
+                <n-button text size="tiny" @click="removeArrayItem('people_involved', idx)">
+                  <n-icon :component="CloseOutline" size="12" />
+                </n-button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Row 4: Items -->
+          <div class="edit-section">
+            <div class="edit-section-header">
+              <span class="edit-label">Items:</span>
+              <n-button text size="tiny" @click="addArrayItem('items')">
+                <n-icon :component="AddOutline" />
+              </n-button>
+            </div>
+            <div class="array-tags-row">
+              <div v-for="(item, idx) in editForm.items" :key="'item-'+idx" class="array-tag-item">
+                <n-input 
+                  v-model:value="editForm.items[idx]" 
+                  size="tiny"
+                  placeholder="Item"
+                  style="width: 80px"
+                />
+                <n-button text size="tiny" @click="removeArrayItem('items', idx)">
+                  <n-icon :component="CloseOutline" size="12" />
+                </n-button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Row 5: Physiological Sensations -->
+          <div class="edit-section">
+            <div class="edit-section-header">
+              <span class="edit-label">Body Feelings:</span>
+              <n-button text size="tiny" @click="addArrayItem('physiological_sensations')">
+                <n-icon :component="AddOutline" />
+              </n-button>
+            </div>
+            <div class="array-tags-row">
+              <div v-for="(sens, idx) in editForm.physiological_sensations" :key="'sens-'+idx" class="array-tag-item">
+                <n-input 
+                  v-model:value="editForm.physiological_sensations[idx]" 
+                  size="tiny"
+                  placeholder="Feeling"
+                  style="width: 80px"
+                />
+                <n-button text size="tiny" @click="removeArrayItem('physiological_sensations', idx)">
+                  <n-icon :component="CloseOutline" size="12" />
+                </n-button>
+              </div>
+            </div>
+          </div>
         </div>
         
-        <div class="footer-right">
-          <span class="meta-separator">|</span>
-          <span class="footer-info">{{ record.chixushijian || '未记录时长' }}</span>
-          <span v-if="record.shanggexiangmu" class="footer-info">📁 {{ record.shanggexiangmu }}</span>
-        </div>
+        <!-- View Mode: Original Footer -->
+        <template v-else>
+          <div class="footer-scroll-area">
+            <!-- 物理场景 -->
+            <span v-if="meta.location" class="footer-meta">
+              <n-icon :component="LocationOutline" /> {{ meta.location }}
+            </span>
+            <!-- 人物 -->
+            <span v-for="p in (meta.people_involved || []).slice(0, 3)" :key="p" class="footer-meta person" @click="$emit('tag-click', 'person', p)">
+              @{{ p }}
+            </span>
+            <!-- 交互 -->
+            <span v-if="meta.interaction_type && meta.interaction_type !== 'Solo'" class="footer-meta">
+               {{ getInteractionLabel(meta.interaction_type) }}
+            </span>
+            <!-- 物品 -->
+            <span v-for="i in displayedItems" :key="i" class="footer-meta item" @click="$emit('tag-click', 'item', i)">
+              #{{ i }}
+            </span>
+            <!-- 生理感受 -->
+            <span v-if="meta.physiological_sensations?.length" class="footer-meta physio">
+              <n-icon :component="BodyOutline" /> {{ meta.physiological_sensations[0] }}
+            </span>
+          </div>
+          
+          <div class="footer-right">
+            <span class="meta-separator">|</span>
+            <span class="footer-info">{{ record.chixushijian || '未记录时长' }}</span>
+            <span v-if="record.shanggexiangmu" class="footer-info">📁 {{ record.shanggexiangmu }}</span>
+          </div>
+        </template>
       </div>
 
     </div>
@@ -175,11 +378,13 @@
 import { ref, computed } from 'vue'
 import { formatDistanceToNow } from 'date-fns'
 import { zhCN } from 'date-fns/locale' 
+import { useMessage } from 'naive-ui'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import { 
   SparklesOutline, FlashOutline, TimeOutline, FolderOpenOutline,
   EyeOutline, LocationOutline, BodyOutline, ChevronDownOutline as ChevronDown, 
-  ChevronUpOutline as ChevronUp
+  ChevronUpOutline as ChevronUp, CreateOutline, CloseOutline, CheckmarkOutline,
+  AddOutline, TrashOutline
 } from '@vicons/ionicons5'
 
 const props = defineProps({
@@ -189,9 +394,14 @@ const props = defineProps({
   showAllInCompact: { type: Boolean, default: false }
 })
 
-defineEmits(['tag-click', 'request-analysis'])
+const emit = defineEmits(['tag-click', 'request-analysis', 'refresh'])
 
+const message = useMessage()
 const showPsychology = ref(false)
+const isEditing = ref(false)
+const editForm = ref({})
+const isSaving = ref(false)
+
 const meta = computed(() => props.record._ai_meta || {})
 
 // 核心逻辑：是否有正文内容
@@ -279,6 +489,90 @@ const getTimeOrientationLabel = (o) => {
 const getInteractionLabel = (t) => {
   const map = { 'Solo': '独处', 'OneOnOne': '1v1', 'Group': '小组', 'Crowd': '人群' }
   return map[t] || t
+}
+
+// ============ Edit Mode Functions ============
+
+const startEdit = () => {
+  // Deep copy raw field values
+  editForm.value = {
+    // Raw fields (stored in appData.json)
+    ganshou: props.record.ganshou || '',
+    time: props.record.time ? new Date(props.record.time).getTime() : Date.now(),
+    
+    // AI meta fields (stored in ai_meta_index.json)
+    summary: meta.value.summary || '',
+    energy_level: meta.value.energy_level || 5,
+    focus_level: meta.value.focus_level || 5,
+    key_quotes: [...(meta.value.key_quotes || [])],
+    people_involved: [...(meta.value.people_involved || [])],
+    items: [...(meta.value.items || [])],
+    location: meta.value.location || '',
+    physiological_sensations: [...(meta.value.physiological_sensations || [])]
+  }
+  isEditing.value = true
+}
+
+const cancelEdit = () => {
+  isEditing.value = false
+  editForm.value = {}
+}
+
+// Helper functions for array editing
+const addArrayItem = (fieldName) => {
+  if (!editForm.value[fieldName]) {
+    editForm.value[fieldName] = []
+  }
+  editForm.value[fieldName].push('')
+}
+
+const removeArrayItem = (fieldName, index) => {
+  editForm.value[fieldName].splice(index, 1)
+}
+
+const saveEdit = async () => {
+  if (isSaving.value) return
+  
+  try {
+    isSaving.value = true
+    
+    // Build raw field update payload (only time and ganshou)
+    const rawPayload = {
+      ganshou: editForm.value.ganshou,
+      time: typeof editForm.value.time === 'number' 
+        ? new Date(editForm.value.time).toISOString().slice(0, 19)
+        : editForm.value.time
+    }
+    
+    // Build AI meta update payload
+    const aiMetaPayload = {
+      summary: editForm.value.summary,
+      energy_level: parseInt(editForm.value.energy_level) || 5,
+      focus_level: parseInt(editForm.value.focus_level) || 5,
+      key_quotes: editForm.value.key_quotes.filter(q => q.trim() !== ''),
+      people_involved: editForm.value.people_involved.filter(p => p.trim() !== ''),
+      items: editForm.value.items.filter(i => i.trim() !== ''),
+      location: editForm.value.location,
+      physiological_sensations: editForm.value.physiological_sensations.filter(s => s.trim() !== '')
+    }
+    
+    // Call backend API with both payloads
+    const result = await window.assistant.updateRecord(props.record._id, rawPayload, aiMetaPayload)
+    
+    if (result.success) {
+      message.success('Record updated successfully')
+      isEditing.value = false
+      // Notify parent to refresh data
+      emit('refresh')
+    } else {
+      message.error(`Update failed: ${result.error}`)
+    }
+  } catch (error) {
+    console.error('[EnhancedRecordCard] Save error:', error)
+    message.error('Failed to save changes')
+  } finally {
+    isSaving.value = false
+  }
 }
 </script>
 
@@ -546,6 +840,69 @@ const getInteractionLabel = (t) => {
 .placeholder-content { text-align: center; }
 .pulse-icon { animation: pulse 2s infinite; opacity: 0.5; }
 @keyframes pulse { 50% { opacity: 1; transform: scale(1.1); } }
+
+/* ============ Edit Mode Styles ============ */
+.edit-textarea {
+  font-family: var(--font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+}
+
+.edit-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 0;
+  width: 100%;
+}
+
+.edit-section {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.edit-section-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+
+.edit-field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.edit-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 90px;
+}
+
+.array-item-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+
+.array-tags-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+}
+
+.array-tag-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+  padding: 2px 4px;
+}
 
 /* 暗黑模式适配 (如果你的 APP 只是切换 class 或 data-theme) */
 [data-theme="dark"] .journal-card {

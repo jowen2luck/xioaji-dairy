@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>《心迹流转：修心大王岁末觉察录》</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700&family=Merriweather:ital,wght@0,300;0,400;0,700;1,300;1,400;1,700&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'parchment-bg': '#FDF9F3',
+                        'charcoal-text': '#3A3B3C',
+                        'sepia-text': '#5A4A3C',
+                        'faded-gold': '#C8AE7D',
+                        'faded-gold-light': 'rgba(200, 174, 125, 0.3)',
+                    },
+                    fontFamily: {
+                        'playfair-display': ['"Playfair Display"', 'serif'],
+                        'merriweather': ['Merriweather', 'serif'],
+                        'lato': ['Lato', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Custom styles for scroll-padding and readability */
+        html {
+            scroll-padding-top: 2rem; /* Ensures a little space above scroll targets */
+        }
+        .chapter-section {
+            padding-top: 4rem; /* Ensures chapter titles aren't hidden by sticky sidebar nav on scroll */
+            padding-bottom: 4rem;
+        }
+        .main-content p {
+            max-width: 70ch; /* Optimal line length for readability */
+            margin-left: auto;
+            margin-right: auto;
+        }
+        @media (min-width: 1024px) { /* Adjust for larger screens */
+            .main-content p {
+                max-width: 65ch;
+            }
+        }
+        .active-chapter-link {
+            font-weight: 700; /* Bold */
+            color: #C8AE7D; /* Faded gold */
+            position: relative;
+        }
+        .active-chapter-link::before {
+            content: '';
+            position: absolute;
+            left: -1rem; /* Adjust as needed */
+            top: 50%;
+            transform: translateY(-50%);
+            height: 0.7em; /* Height of the bullet */
+            width: 0.25em; /* Width of the bullet */
+            background-color: #C8AE7D;
+            border-radius: 9999px; /* Pill shape */
+        }
+        .sidebar-nav-item {
+            transition: color 0.2s ease-in-out;
+        }
+        .sidebar-nav-item:hover {
+            color: #C8AE7D;
+        }
+        .initial-toc-link {
+            transition: color 0.2s ease-in-out;
+        }
+        .initial-toc-link:hover {
+            color: #C8AE7D;
+            text-decoration: underline;
+        }
+        /* Style for subtle section separators */
+        .chapter-separator {
+            width: 10%;
+            height: 1px;
+            background-color: rgba(200, 174, 125, 0.5); /* Lighter faded-gold */
+            margin: 4rem auto; /* Centered, generous vertical margin */
+        }
+    </style>
+</head>
+<body class="bg-parchment-bg text-charcoal-text font-merriweather selection:bg-faded-gold selection:text-white">
+
+    <div class="container mx-auto px-4 sm:px-6 lg:px-8 py-8 md:py-12 lg:py-16 flex flex-col lg:flex-row gap-8 lg:gap-12">
+
+        <!-- Main Content Area -->
+        <main class="w-full lg:w-2/3 lg:pr-8 xl:pr-12">
+
+            <!-- Cover Page Section -->
+            <section id="cover-page" class="flex flex-col items-center justify-center min-h-[50vh] py-20 lg:py-32 xl:py-48 text-center border-b border-faded-gold-light mb-16">
+                <h1 class="font-playfair-display text-5xl md:text-6xl lg:text-7xl xl:text-8xl leading-tight tracking-wider text-sepia-text drop-shadow-sm px-4">
+                    《心迹流转：修心大王岁末觉察录》
+                </h1>
+            </section>
+
+            <!-- Initial Table of Contents Section -->
+            <section id="initial-toc" class="mb-16 chapter-section">
+                <h2 class="font-playfair-display text-4xl md:text-5xl lg:text-6xl text-sepia-text text-center pb-8 border-b border-faded-gold-light mb-12">目录</h2>
+                <nav class="font-merriweather text-xl md:text-2xl leading-loose text-center">
+                    <ul class="space-y-4">
+                        <li><a href="#chapter-0" class="initial-toc-link block py-2">序章：岁末回望</a></li>
+                        <li><a href="#chapter-1" class="initial-toc-link block py-2">第一章：八月流光</a></li>
+                        <li><a href="#chapter-2" class="initial-toc-link block py-2">第二章：九月静思</a></li>
+                        <li><a href="#chapter-3" class="initial-toc-link block py-2">第三章：十月拾忆</a></li>
+                        <li><a href="#chapter-4" class="initial-toc-link block py-2">第四章：十一月沉浮</a></li>
+                        <li><a href="#chapter-5" class="initial-toc-link block py-2">第五章：十二月回响</a></li>
+                    </ul>
+                </nav>
+            </section>
+
+            <!-- Chapter Sections -->
+            <section id="chapter-0" class="chapter-section border-b border-faded-gold-light">
+                <h3 class="font-playfair-display text-3xl md:text-4xl lg:text-5xl text-sepia-text pb-6 text-center lg:text-left">序章：岁末回望</h3>
+                <p class="mb-6 indent-8">时间如白驹过隙，转瞬已至岁末。这本个人编年史，并非宏大叙事的史诗，而是修心大王于2025年间，点滴心迹的流转，微末觉察的集录。字里行间，既有与外界世界的碰撞，亦有与内在自我的对话。这是一场关于成长与蜕变、困惑与明晰的旅程，于平凡中窥见生命的深邃，于日常中触碰灵魂的律动。</p>
+            </section>
+            <div class="chapter-separator"></div>
+
+            <section id="chapter-1" class="chapter-section border-b border-faded-gold-light">
+                <h3 class="font-playfair-display text-3xl md:text-4xl lg:text-5xl text-sepia-text pb-6 text-center lg:text-left">第一章：八月流光</h3>
+                <p class="mb-6 indent-8">八月的尾声，带着夏日最后的余温，也带来了内心深处的初次审视。那一日，醒来后身体的疲惫与精神的内耗交织，刷着视频，却只感到时间被无形地吞噬，留下隐约的自我批判。渴望更好的状态，却又在孤独中陷入自我怀疑的泥沼。仿佛能量低落的现状成为一种沉重的枷锁，驱使着修心大王开始思考如何挣脱，如何为自己注入更多的力量，减少痛苦，增加轻松。这不仅是身体的觉醒，更是灵魂深处对成长的渴望，如同一颗种子，在夏末的微光中，悄然萌芽。</p>
+            </section>
+            <div class="chapter-separator"></div>
+
+            <section id="chapter-2" class="chapter-section border-b border-faded-gold-light">
+                <h3 class="font-playfair-display text-3xl md:text-4xl lg:text-5xl text-sepia-text pb-6 text-center lg:text-left">第二章：九月静思</h3>
+                <p class="mb-6 indent-8">九月，秋意渐浓，修心大王的内心也步入了深刻的静思。工作与生活的压力如影随形，论文的进展、代码的修复，无一不引发着内在的焦虑与倦怠。对“具有外部压力”工作的抗拒，成为一种反复出现的模式，似乎身体与意志在无声地对抗。然而，正是在这种挣扎中，他开始寻求“当下的力量”，尝试通过冥想、阅读与亲近自然来寻回内心的平静。每一次与朋友真诚的交流，每一次在公园的散步，都成为对抗虚无与心虚的锚点。</p>
+                <p class="mb-6 indent-8">月中，项飙老师提出的“雄辩”概念，如一道闪电划破迷雾，揭示了过往认知中的盲区——那些脱离生命体验的假设与推理，终究无法填补内心的“心虚”。这让修心大王开始反思职业规划与人生选择，决定忠于自己的真实感受，不再为社会期待所累。月末，将前往北京的通知带来了新的不安与期待，既有对舒适圈的眷恋，也有对新体验的憧憬。在对“老岁月”记录软件的感悟中，他发现通过文字与他者联结，能帮助自己更清晰地观察自我，这成为一场持续的自我觉察之旅。</p>
+            </section>
+            <div class="chapter-separator"></div>
+
+            <section id="chapter-3" class="chapter-section border-b border-faded-gold-light">
+                <h3 class="font-playfair-display text-3xl md:text-4xl lg:text-5xl text-sepia-text pb-6 text-center lg:text-left">第三章：十月拾忆</h3>
+                <p class="mb-6 indent-8">十月，秋风萧瑟，修心大王的心绪也在往返京杭之间，拨动着回忆的琴弦。工作的重压依然存在，论文的整理、新功能的开发，让他深感AI的强大与自身的依赖。然而，他也在AI的协助下，逐渐找到了创作的乐趣与工作的成就感。与母亲的深情对话，更成为本月的一束暖阳，感受到被爱与支持的巨大力量，也体察到母亲内心深藏的委屈与渴望被理解的柔软。这让他意识到，爱与支持是相互的，理解他人的同时，也是在疗愈自己。</p>
+                <p class="mb-6 indent-8">本月，“重新长大”成为一个重要的心理主题。通过阅读，他开始尝试“重新养育自己”，回顾童年记忆，审视那些不曾被充分理解的情绪。旧地重游圆明园，物是人非之感油然而生，既是对过去的告别，也是对当下感知的珍视。从购买键盘的期待落空，到理解多巴胺与情绪基准线的关系，修心大王对“期待”与“现实”的落差有了更深层次的体悟。月末，他开始系统性地思考人生的“终极意义”，意识到真正的意义并非外部赋予，而是从每一次真切的感受与觉察中提炼而出。这份觉察，如同指引，帮助他在迷茫与虚弱中，寻找着前行的方向。</p>
+            </section>
+            <div class="chapter-separator"></div>
+
+            <section id="chapter-4" class="chapter-section border-b border-faded-gold-light">
+                <h3 class="font-playfair-display text-3xl md:text-4xl lg:text-5xl text-sepia-text pb-6 text-center lg:text-left">第四章：十一月沉浮</h3>
+                <p class="mb-6 indent-8">十一月，气温骤降，修心大王的内心也在忙碌与沉思中起伏不定。工作的压力与日俱增，代码的修改、项目的优化，让他时而感到麻木，时而又在小小的成就中找到平静。他开始深入探索AI助手的开发，将其视为一种自我表达与创造的出口，在“拷打笨蛋AI”的过程中，感受到独有的乐趣与掌控感。</p>
+                <p class="mb-6 indent-8">本月，对情绪与身体的觉察达到新的深度。他发现过量饮食与低落情绪之间的微妙关联，并开始尝试通过饮食调节来改善心境。对“周期性抑郁”的观察，让他意识到情绪的波动并非无迹可寻，而是与生理状态紧密相连。在与朋友的交流中，他重新审视了人际关系中的“雄辩”与“表达边界”，学会在关心他人评价的同时，更要忠于自我感受，保护内心的自主性。梦境中对“台湾求学”与“小饭”的纠结，映射出对未知的恐惧与对亲密关系的渴望。月末，他根据心理需求测试，明确了“爱”、“创造”与“安全感”是其核心精神需求，这为未来的自我探索提供了清晰的指引。在对工作与休闲的权衡中，他甚至发展出一种“卧底策略”，试图在外部任务与内在渴望之间，找到一种巧妙的平衡。</p>
+            </section>
+            <div class="chapter-separator"></div>
+
+            <section id="chapter-5" class="chapter-section">
+                <h3 class="font-playfair-display text-3xl md:text-4xl lg:text-5xl text-sepia-text pb-6 text-center lg:text-left">第五章：十二月回响</h3>
+                <p class="mb-6 indent-8">十二月，寒冬降临，修心大王的心灵却在旅途与创造中焕发出新的生机。一场说走就走的绍兴之旅，成为本月最亮丽的色彩。在青旅的漂流本上留下心迹，在古老的鲁迅故居感受历史的温度，在八字桥畔品尝臭豆腐的市井风情。旅行中，他不仅与新的环境建立了联结，更在与人交往中，深化了对“系”与“沟通姿态”的理解，认识到在不熟悉的人群中保持自我，并非排斥，而是对内在边界的尊重。</p>
+                <p class="mb-6 indent-8">工作方面，他积极投身于AI助手的完善，将其视为一份独特的“生日礼物”，每一步功能的实现都带来了巨大的满足感与成就感。他学会了在与导师的沟通中，巧妙地设立边界，既完成了任务，又为自己争取了休息和创作的空间，这是一种“厚黑学”般的智慧，更是对自我需求的坚定捍卫。</p>
+                <p class="mb-6 indent-8">本月，家庭的温暖也成为重要的慰藉。与母亲深聊，看到她脆弱的一面，让他对母爱有了更深层次的理解，并决心帮助母亲寻找自我关怀的路径。生日之际，二妞与母亲的用心礼物，尤其是那封饱含深情的手写信，触动了他内心最柔软的地方，感受到被珍视的幸福。在冰雪覆盖的公园里，他重拾童心，感受着简单而纯粹的快乐，并开始反思“多劳多得”的现代语境，追求更符合自身节奏的生活方式。</p>
+                <p class="mb-6 indent-8">回望这一年，修心大王从最初的内耗与迷茫，逐渐走向了更深的自我觉察与内在和谐。他不再苛责自我，而是倾听身体的信号，尊重情绪的起伏。在每一个当下，他努力寻找着能够滋养灵魂的体验，无论是旅行、创作，还是与亲友的深度联结。这份编年史，不仅记录了时间的流逝，更见证了一个灵魂如何在这流转的岁月中，逐步走向清明与丰盈。那些曾经的困境与纠结，在回首之时，都化作了成长的印记，成为“且认他乡作故乡”，在当下生根发芽的坚定力量。</p>
+            </section>
+
+        </main>
+
+        <!-- Sidebar Area -->
+        <aside class="w-full lg:w-1/3 lg:pl-8 xl:pl-12 lg:sticky lg:top-8 self-start order-first lg:order-last mb-12 lg:mb-0">
+            <div class="bg-parchment-bg lg:border lg:border-faded-gold-light lg:rounded-lg p-6 lg:p-8 shadow-sm">
+                <h4 class="font-lato text-xl md:text-2xl font-bold text-sepia-text mb-6 pb-4 border-b border-faded-gold-light">修心大王</h4>
+                <nav class="sticky-nav">
+                    <ul class="space-y-3 font-lato text-lg text-charcoal-text">
+                        <li><a href="#chapter-0" class="sidebar-nav-item block py-1">序章：岁末回望</a></li>
+                        <li><a href="#chapter-1" class="sidebar-nav-item block py-1">第一章：八月流光</a></li>
+                        <li><a href="#chapter-2" class="sidebar-nav-item block py-1">第二章：九月静思</a></li>
+                        <li><a href="#chapter-3" class="sidebar-nav-item block py-1">第三章：十月拾忆</a></li>
+                        <li><a href="#chapter-4" class="sidebar-nav-item block py-1">第四章：十一月沉浮</a></li>
+                        <li><a href="#chapter-5" class="sidebar-nav-item block py-1">第五章：十二月回响</a></li>
+                    </ul>
+                </nav>
+
+                <div class="mt-10 pt-8 border-t border-faded-gold-light text-center">
+                    <p class="font-playfair-display italic text-lg text-sepia-text leading-relaxed">
+                        "Every moment is a fresh beginning."
+                    </p>
+                    <p class="font-lato text-sm text-charcoal-text mt-2">— T.S. Eliot</p>
+                </div>
+            </div>
+        </aside>
+
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const chapterSections = document.querySelectorAll('main section[id^="chapter-"]');
+            const navLinks = document.querySelectorAll('.sidebar-nav-item');
+
+            const observerOptions = {
+                root: null, // Use the viewport as the root
+                rootMargin: '-50% 0px -50% 0px', // When the middle of the target enters the middle 50% of the viewport
+                threshold: 0 // Trigger when any part of the target enters/exits the root
+            };
+
+            const observer = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    const id = entry.target.id;
+                    const correspondingLink = document.querySelector(`.sidebar-nav-item[href="#${id}"]`);
+
+                    if (correspondingLink) {
+                        if (entry.isIntersecting) {
+                            // Remove active class from all links first
+                            navLinks.forEach(link => link.classList.remove('active-chapter-link'));
+                            // Add active class to the currently intersecting link
+                            correspondingLink.classList.add('active-chapter-link');
+                        }
+                    }
+                });
+            }, observerOptions);
+
+            // Observe each chapter section
+            chapterSections.forEach(section => {
+                observer.observe(section);
+            });
+
+            // Set initial active state for the first chapter on page load
+            const firstChapterLink = document.querySelector('.sidebar-nav-item[href="#chapter-0"]');
+            if (firstChapterLink) {
+                firstChapterLink.classList.add('active-chapter-link');
+            }
+        });
+    </script>
+
+</body>
+</html>

@@ -9,6 +9,7 @@ import { ChatOpenAI } from '@langchain/openai'
 // 定义不同 baseURL 对应的 API Key 环境变量映射
 const API_KEY_MAP = {
   'https://dashscope.aliyuncs.com/compatible-mode/v1': 'DASHSCOPE_API_KEY_QWEN',
+  'https://dashscope.aliyuncs.com/api/v1': 'DASHSCOPE_API_KEY',  // 新增：百炼 API 端点
   'https://uni-api.cstcloud.cn/v1': 'DASHSCOPE_API_KEY_SCTCLOUD',
   'https://api.openai.com/v1': 'OPENAI_API_KEY'
 }

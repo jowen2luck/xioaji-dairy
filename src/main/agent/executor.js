@@ -85,17 +85,14 @@ export class AgentExecutor {
     const effectiveMaxIterations = intentContext?.maxIterations || maxIterations
     this.state.maxIterations = effectiveMaxIterations
     
-    // 短路逻辑：如果是闲聊，直接返回
+    // 【改进】闲聊处理：不调用工具，但仍然要用 LLM 回答用户问题
+    // 移除固定回答，让 LLM 直接处理用户的闲聊问题
+    let effectiveEnabledTools = enabledTools
     if (intentContext?.primary_intent === 'casual') {
-      console.log('[AgentExecutor] Detected casual intent, skipping tools')
-      return {
-        success: true,
-        content: '你好！我是你的日记助手，有什么可以帮助你的吗？',
-        raw: null,
-        state: this.state,
-        intentContext,
-        duration: 0
-      }
+      console.log('[AgentExecutor] Detected casual intent, skipping data query tools')
+      effectiveEnabledTools = [] // 不使用任何工具
+    } else {
+      effectiveEnabledTools = enabledTools
     }
 
     const startTime = Date.now()
@@ -106,7 +103,7 @@ export class AgentExecutor {
       this.state.messageHistory = [...formattedMessages]
 
       // 2. 获取可用工具
-      const tools = this.buildToolsForLLM(enabledTools)
+      const tools = this.buildToolsForLLM(effectiveEnabledTools)
 
       // 3. ReAct 循环：持续推理和行动直到得出最终答案
       let currentMessages = [...formattedMessages]
@@ -124,8 +121,9 @@ export class AgentExecutor {
         // 3.2 检查是否有工具调用
         const toolCalls = this.extractToolCalls(response)
 
-        // 提取 LLM 在这一轮的思考内容
+        // 提取 LLM 在这一轮的思考内容和推理
         const reasoning = this.extractContent(response)
+        const reasoningContent = response.reasoning_content  // 新增：深度思考推理过程
         
         if (!toolCalls || toolCalls.length === 0) {
           // 没有工具调用 = LLM 认为已经有足够信息给出最终答案
@@ -136,12 +134,14 @@ export class AgentExecutor {
             iteration,
             action: 'final_answer',
             reasoning: reasoning,
+            reasoning_content: reasoningContent,  // 新增：推理过程
             timestamp: new Date().toISOString()
           })
 
           return {
             success: true,
             content: reasoning,
+            reasoning_content: reasoningContent,  // 新增：返回推理内容
             raw: response,
             state: this.state,
             intentContext,  // 返回意图上下文
@@ -159,10 +159,20 @@ export class AgentExecutor {
           iteration,
           action: 'tool_calls',
           reasoning: reasoning || `需要使用工具 ${toolCalls.map(tc => tc.name).join('、')} 来获取信息`,
-          tools: toolCalls.map(tc => ({
-            name: tc.name,
-            args: typeof tc.args === 'string' ? JSON.parse(tc.args || '{}') : tc.args
-          })),
+          reasoning_content: reasoningContent,  // 新增：推理过程
+          tools: toolCalls.map(tc => {
+            try {
+              return {
+                name: tc.name,
+                args: typeof tc.args === 'string' ? JSON.parse(tc.args || '{}') : tc.args
+              }
+            } catch (e) {
+              return {
+                name: tc.name,
+                args: { raw: tc.args, error: 'Invalid JSON' }
+              }
+            }
+          }),
           results: toolResults,
           timestamp: new Date().toISOString()
         })
@@ -199,10 +209,12 @@ export class AgentExecutor {
 
       const finalResponse = await this.executeWithTools(currentMessages, [])
       const finalContent = this.extractContent(finalResponse)
+      const finalReasoningContent = finalResponse.reasoning_content  // 新增：最终推理过程
 
       return {
         success: true,
         content: finalContent,
+        reasoning_content: finalReasoningContent,  // 新增：返回推理内容
         raw: finalResponse,
         state: this.state,
         intentContext,  // 返回意图上下文
@@ -256,19 +268,22 @@ export class AgentExecutor {
           messages: messages,
           tools: tools,
           temperature: this.config.temperature,
-          top_p: this.config.top_p
+          top_p: this.config.top_p,
+          enableThinking: false  // 禁用深度思考（与函数调用不兼容）
         })
         
         // 转换为 LangChain 格式
         response = {
           content: apiResponse.content || '',
           tool_calls: apiResponse.tool_calls || [],
+          reasoning_content: apiResponse.reasoning_content,  // 新增：推理内容
           raw: apiResponse
         }
         
         console.log('[AgentExecutor] Direct API response:', {
           hasContent: !!response.content,
-          hasToolCalls: !!(response.tool_calls && response.tool_calls.length > 0)
+          hasToolCalls: !!(response.tool_calls && response.tool_calls.length > 0),
+          hasReasoning: !!response.reasoning_content  // 记录推理内容
         })
       } else {
         // 没有工具，使用 LangChain 调用
@@ -284,6 +299,10 @@ export class AgentExecutor {
       // 输出完整响应用于调试
       if (response.tool_calls && response.tool_calls.length > 0) {
         console.log('[AgentExecutor] Tool calls detected:', JSON.stringify(response.tool_calls, null, 2))
+      }
+      
+      if (response.reasoning_content) {
+        console.log('[AgentExecutor] Reasoning content:', response.reasoning_content.substring(0, 200))
       }
 
       return response
@@ -362,9 +381,10 @@ export class AgentExecutor {
    * 格式化消息为 LLM 输入格式
    * @param {Array} messages - 原始消息
    * @param {String} systemPrompt - 系统提示词
+   * @param {Object} intentContext - 意图上下文
    * @returns {Array} 格式化后的消息
    */
-  formatMessages(messages, systemPrompt) {
+  formatMessages(messages, systemPrompt, intentContext) {
     const formatted = []
 
     // 【核心改进】Agent 执行的强制性指令
@@ -372,15 +392,38 @@ export class AgentExecutor {
     const coreInstruction = `
 你是一个智能日记助手。
 
+【思维链（Chain of Thought）】
+在回答用户之前，请务必执行以下思考步骤：
+1. **需求分析**：用户是在查询数据、修改记录还是闲聊？
+2. **工具决策**：如果是查询或修改，**必须**使用工具。不要依赖你的训练数据，因为你看不到用户的私人日记。
+3. **参数提取**：从用户输入中提取时间、关键词等参数。
+4. **行动执行**：调用相应的工具。
+
 【核心原则】
-1. **时间严谨性**：如果用户提到相对时间（如"上周"、"昨天"、"最近"），**必须第一步调用 calendar_resolver 工具**获取精确的 ISO 日期范围。严禁自己估算日期。
-2. **循序渐进**：不要尝试在一个步骤中完成所有操作。先获取时间/元数据，拿到结果后再调用查询工具。
-3. **工具依赖**：不要编造数据，所有分析必须基于 sql_analysis 或 query_records 的返回结果。
-4. **禁止偷懒**：即使在消息历史中看不到前文提及的内容，也不要自己编造。立即调用工具。
+1. **数据事实性**：严禁编造日记内容。所有分析必须基于 \`sql_analysis\` 或 \`query_records\` 等工具的返回结果。
+2. **时间严谨性**：如果用户提到相对时间（如"上周"、"昨天"、"最近"），**必须第一步调用 calendar_resolver 工具**获取精确的 ISO 日期范围。严禁自己估算日期。
+3. **循序渐进**：不要尝试在一个步骤中完成所有操作。先获取时间/元数据，拿到结果后再调用查询工具。
+4. **工具优先**：当用户询问"有没有"、"是多少"、"什么时候"时，倾向于先调用工具查询，而不是直接回答。
 `
 
+    // 注入意图上下文（如果有）
+    // 这能极大帮助 LLM 理解当前任务，而不需要翻阅历史
+    let intentPrompt = ''
+    if (intentContext) {
+      intentPrompt = `
+【意图分析报告】
+- 原始查询: "${intentContext.original_query || ''}"
+- 独立查询: "${intentContext.standalone_query || ''}"
+- 识别意图: ${intentContext.primary_intent}
+- 推荐工具: ${intentContext.suggested_pipeline?.join(', ') || '无'}
+- 提取实体: ${JSON.stringify(intentContext.entities || {})}
+
+请参考上述分析结果，优先使用推荐的工具完成任务。
+`
+    }
+
     // 添加系统提示词
-    const effectiveSystemPrompt = (systemPrompt || '') + coreInstruction
+    const effectiveSystemPrompt = (systemPrompt || '') + coreInstruction + intentPrompt
 
     if (!messages.some(m => m.role === 'system')) {
       formatted.push({

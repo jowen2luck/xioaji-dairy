@@ -8,6 +8,7 @@ import { initializeModel } from '../llm/models.js'
 import { getToolRegistry } from '../tools/registry.js'
 import { AgentExecutor } from './executor.js'
 import { analyzeIntent, analyzeIntentWithLLM } from '../intent/analyzer.js'
+import { updateRecord } from '../data/index.js'
 
 /**
  * 注册所有 IPC 处理器
@@ -167,6 +168,11 @@ export function registerIPCHandlers(config = {}) {
         console.log('[IPC:chat] Query rewritten:', userQuery, '->', standaloneQuery)
       }
 
+      // 提取前端传入的 System Prompt (如果有)
+      // 这样可以保留"鸡大师"等角色设定，同时切断对话历史
+      const systemMessage = messages.find(m => m.role === 'system')
+      const customSystemPrompt = systemMessage ? systemMessage.content : ''
+
       // 构造给 Executor 的"干净"消息列表
       // 【核心】不传递完整的历史记录，而是：
       // - 仅包含当前的独立查询
@@ -182,13 +188,14 @@ export function registerIPCHandlers(config = {}) {
         messageCount: executorMessages.length,
         standaloneQuery,
         hasHistory: false,
+        hasSystemPrompt: !!customSystemPrompt,
         note: '历史已切断，只有独立查询'
       })
 
       // 执行代理（传入意图上下文）
       const result = await executor.execute({
         messages: executorMessages, // <--- 传入干净的消息列表（已切断历史）
-        systemPrompt: '', // 不重复添加 system prompt
+        systemPrompt: customSystemPrompt, // <--- 传入前端定义的 System Prompt
         userQuery: standaloneQuery, // <--- 使用重写后的查询
         enabledTools: intentTools.length > 0 ? intentTools : enabledToolNames,
         maxIterations: intentContext?.maxIterations || 3,  // 使用意图推荐的迭代次数
@@ -314,19 +321,21 @@ export function registerIPCHandlers(config = {}) {
 
   /**
    * handler: assistant:list-models
+   * 
    * 列出可用的模型和 API 端点
+   * ⚠️ 說明：前端 GlobalSettings.vue 直接使用 DEFAULT_CONFIG.baseURLs 来渲染模型選項，
+   * 此 IPC 接口不会被前端调用（已被弃用）。
+   * 
+   * 如果你需要根據存存在 localStorage 中的配置清单列出模型，
+   * 可以从前端发送 baseURLs 更新，例如：
+   * window.assistant.listModels({ baseURLs: [...] })
    */
-  ipcMain.handle('assistant:list-models', async () => {
-    return [
-      {
-        url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-        models: ['qwen-plus-2025-09-11', 'qvq-max-2025-05-15', 'qwen3-max-2025-09-23', 'qwen3-next-80b-a3b-instruct', 'qwen-flash-2025-07-28', 'qwen-flash'],
-      },
-      {
-        url: 'https://api.openai.com/v1',
-        models: ['gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo'],
-      },
-    ]
+  ipcMain.handle('assistant:list-models', async (event, payload = {}) => {
+    // 当前应该什么都不返回，因为它已经被前端弃用
+    // 应该让前端供给后端配置清单，而不是什么都不输
+    // 如果前端会调用此接口（总是不调用），应该使用下面的方式：
+    const baseURLs = payload.baseURLs || []
+    return baseURLs
   })
 
   /**
@@ -377,6 +386,38 @@ export function registerIPCHandlers(config = {}) {
     }
   })
 
+  /**
+   * handler: record:update
+   * Update a single record with support for both raw fields and AI metadata
+   */
+  ipcMain.handle('record:update', async (event, { id, data, aiMetaData }) => {
+    try {
+      console.log('[IPC:record:update] Updating record:', id)
+      console.log('[IPC:record:update] Raw data:', data)
+      console.log('[IPC:record:update] AI meta data:', aiMetaData)
+      
+      const result = await updateRecord(id, data, aiMetaData)
+      
+      if (!result.success) {
+        return {
+          success: false,
+          error: result.error
+        }
+      }
+      
+      return {
+        success: true,
+        record: result.record
+      }
+    } catch (error) {
+      console.error('[IPC:record:update] Error:', error)
+      return {
+        success: false,
+        error: error.message
+      }
+    }
+  })
+
   console.log('[IPC] Handlers registered successfully')
 }
 
@@ -391,6 +432,7 @@ export function unregisterIPCHandlers() {
   ipcMain.removeAllListeners('assistant:list-models')
   ipcMain.removeAllListeners('assistant:list-tools')
   ipcMain.removeAllListeners('assistant:analyze-intent')
+  ipcMain.removeAllListeners('record:update')
 }
 
 // 定义不同 baseURL 对应的 API Key 环境变量映射

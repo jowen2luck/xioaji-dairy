@@ -19,23 +19,42 @@
                 </div>
                 <div class="bubble-footer">
                   <span class="time">{{ formatTime(m.time) }}</span>
-                  <!-- 思维记录切换按钮 -->
-                  <n-tooltip v-if="m.reactIndex !== undefined" trigger="hover">
-                    <template #trigger>
-                      <n-button 
-                        quaternary 
-                        circle 
-                        size="tiny" 
-                        class="react-btn"
-                        @click="scrollToReactStep(m.reactIndex, m.conversationId)"
-                      >
-                        <template #icon>
-                          <n-icon size="14"><BrainIcon /></n-icon>
-                        </template>
-                      </n-button>
-                    </template>
-                    查看思维记录
-                  </n-tooltip>
+                  <div class="bubble-actions">
+                    <!-- 复制按钮 -->
+                    <n-tooltip trigger="hover">
+                      <template #trigger>
+                        <n-button 
+                          quaternary 
+                          circle 
+                          size="tiny" 
+                          class="action-btn"
+                          @click="copyToClipboard(m.content)"
+                        >
+                          <template #icon>
+                            <n-icon size="14"><CopyIcon /></n-icon>
+                          </template>
+                        </n-button>
+                      </template>
+                      复制
+                    </n-tooltip>
+                    <!-- 思维记录切换按钮 -->
+                    <n-tooltip v-if="m.reactIndex !== undefined" trigger="hover">
+                      <template #trigger>
+                        <n-button 
+                          quaternary 
+                          circle 
+                          size="tiny" 
+                          class="action-btn"
+                          @click="scrollToReactStep(m.reactIndex, m.conversationId)"
+                        >
+                          <template #icon>
+                            <n-icon size="14"><BrainIcon /></n-icon>
+                          </template>
+                        </n-button>
+                      </template>
+                      查看思维记录
+                    </n-tooltip>
+                  </div>
                 </div>
               </div>
             </div>
@@ -59,12 +78,18 @@
 
 <script setup>
 import { ref, onMounted, nextTick, watch, computed, h } from 'vue'
+import { useMessage } from 'naive-ui'
 import { loadConfig, saveConfig, DEFAULT_CONFIG } from '@renderer/config/assistant'
 import ReActPanel from './ReActPanel.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 
+const message = useMessage()
+
 // 思维图标
 const BrainIcon = { render: () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', innerHTML: '<path fill="currentColor" d="M12 2a9 9 0 0 0-9 9c0 4.17 2.84 7.67 6.69 8.69L12 22l2.31-2.31C18.16 18.67 21 15.17 21 11a9 9 0 0 0-9-9m0 2c1.66 0 3 1.34 3 3s-1.34 3-3 3s-3-1.34-3-3s1.34-3 3-3"/>' }) }
+
+// 复制图标
+const CopyIcon = { render: () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', innerHTML: '<path fill="currentColor" d="M19 2H9c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H9V4h10v12zM5 6H3v14c0 1.1.9 2 2 2h14v-2H5V6z"/>' }) }
 
 const messages = ref([])
 const input = ref('')
@@ -457,7 +482,36 @@ async function invoke(name) {
 
 function escapeHTML(s) { return s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])) }
 
-
+// 复制到剪贴板
+const copyToClipboard = async (content) => {
+  try {
+    // 移除 HTML 标签，提取纯文本
+    const div = document.createElement('div')
+    div.innerHTML = content
+    const plainText = div.textContent || div.innerText || ''
+    
+    // 使用 Clipboard API 复制
+    await navigator.clipboard.writeText(plainText)
+    console.log('已复制到剪贴板')
+    message.success('已复制到剪贴板')
+  } catch (err) {
+    console.error('复制失败:', err)
+    // 降级方案：使用 execCommand
+    try {
+      const textarea = document.createElement('textarea')
+      textarea.value = content
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+      console.log('已复制到剪贴板（降级方案）')
+      message.success('已复制到剪贴板')
+    } catch (fallbackErr) {
+      console.error('复制失败（降级方案也失败）:', fallbackErr)
+      message.error('复制失败，请重试')
+    }
+  }
+}
 
 function onEnter() { if (!sending.value) send() }
 
@@ -605,17 +659,23 @@ async function streamMessageContent(index, text, chunkSize = 80, interval = 60) 
   gap: 8px;
 }
 
-/* 思维记录按钮 */
-.react-btn {
+/* 气泡操作按钮组 */
+.bubble-actions {
+  display: flex;
+  gap: 4px;
+}
+
+/* 操作按钮 */
+.action-btn {
   opacity: 0.6;
   transition: opacity 0.2s ease;
 }
 
-.react-btn:hover {
+.action-btn:hover {
   opacity: 1;
 }
 
-.bubble:hover .react-btn {
+.bubble:hover .action-btn {
   opacity: 0.8;
 }
 

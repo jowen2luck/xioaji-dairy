@@ -34,6 +34,14 @@
           <n-tab-pane name="agent" tab="智能助手">
             <AgentWorkbench />
           </n-tab-pane>
+          
+          <n-tab-pane name="chronicle" tab="Chronicle">
+            <ChroniclePage />
+          </n-tab-pane>
+          
+          <n-tab-pane name="tooltester" tab="工具测试">
+            <ToolTester />
+          </n-tab-pane>
         </n-tabs>
       </div>
     </div>
@@ -48,8 +56,10 @@ import { ref } from 'vue'
 import AnalysisPage from './AnalysisPage.vue'
 import AgentWorkbench from './AgentWorkbench.vue'
 import DataBoardTab from './DataBoardTab.vue'
+import ChroniclePage from './chronicle/ChroniclePage.vue'
 import ThemeSwitcher from './ThemeSwitcher.vue'
 import GlobalSettings from './GlobalSettings.vue'
+import ToolTester from './ToolTester.vue'
 
 // 状态管理
 const activeTab = ref('dashboard')

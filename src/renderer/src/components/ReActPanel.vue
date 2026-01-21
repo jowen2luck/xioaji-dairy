@@ -49,6 +49,15 @@
           
           <!-- 步骤内容 -->
           <div class="step-content">
+            <!-- 深度思考内容（新增） -->
+            <div v-if="step.reasoning_content" class="deep-thinking-section">
+              <div class="section-label">
+                <n-icon size="14"><ThinkIcon /></n-icon>
+                <span>深度思考</span>
+              </div>
+              <div class="thinking-text">{{ step.reasoning_content }}</div>
+            </div>
+            
             <!-- 思考内容 -->
             <div v-if="step.reasoning" class="reasoning-section">
               <div class="section-label">
@@ -782,7 +791,8 @@ const getSignificanceTagType = (result) => {
 .reasoning-section,
 .query-section,
 .tools-section,
-.results-section {
+.results-section,
+.deep-thinking-section {
   background: var(--color-background-soft);
   border-radius: 6px;
   padding: 10px;
@@ -795,6 +805,34 @@ const getSignificanceTagType = (result) => {
   color: var(--color-text);
   word-break: break-word;
   white-space: pre-wrap;
+}
+
+/* 深度思考根据样式（新增） */
+.deep-thinking-section {
+  background: linear-gradient(135deg, rgba(102, 51, 153, 0.05) 0%, var(--color-background-soft) 100%);
+  border: 1px solid rgba(102, 51, 153, 0.2);
+  margin-bottom: 12px;
+}
+
+.deep-thinking-section .section-label {
+  color: #663399;
+  font-weight: 700;
+}
+
+.thinking-text {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--color-text);
+  word-break: break-word;
+  white-space: pre-wrap;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 4px;
+  border-left: 3px solid #663399;
+  font-style: italic;
+  margin-top: 6px;
 }
 
 /* 工具调用卡片 */

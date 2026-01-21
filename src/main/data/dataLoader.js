@@ -158,6 +158,97 @@ export async function saveData(newData) {
 }
 
 /**
+ * Update a single record with support for both raw fields and AI metadata
+ * @param {string} id - Record ID
+ * @param {Object} updates - Fields to update (raw fields)
+ * @param {Object} aiMetaUpdates - AI metadata fields to update (optional)
+ * @returns {Promise<{success: boolean, record?: Object, error?: string}>}
+ */
+export async function updateRecord(id, updates, aiMetaUpdates = null) {
+  try {
+    console.log(`[DataLoader] Updating record ${id}`)
+    console.log(`[DataLoader] Raw field updates:`, updates)
+    console.log(`[DataLoader] AI meta updates:`, aiMetaUpdates)
+    
+    // Step 1: Load existing data
+    if (!fs.existsSync(dataPath)) {
+      return { success: false, error: 'Data file not found' }
+    }
+    
+    const jsonData = fs.readFileSync(dataPath, 'utf-8')
+    if (jsonData.length === 0) {
+      return { success: false, error: 'Empty data file' }
+    }
+    
+    const rawData = JSON.parse(jsonData)
+    
+    // Step 2: Find target record
+    const recordIndex = rawData.findIndex(r => r._id === id)
+    if (recordIndex === -1) {
+      return { success: false, error: `Record with ID ${id} not found` }
+    }
+    
+    // Step 3: Apply raw field updates (only allowed fields)
+    const allowedRawFields = ['ganshou', 'time']
+    
+    const updatedRecord = { ...rawData[recordIndex] }
+    
+    Object.keys(updates).forEach(key => {
+      if (allowedRawFields.includes(key)) {
+        updatedRecord[key] = updates[key]
+      } else {
+        console.warn(`[DataLoader] Ignoring update to non-allowed raw field: ${key}`)
+      }
+    })
+    
+    // Step 4: Save raw data back to file
+    rawData[recordIndex] = updatedRecord
+    fs.writeFileSync(dataPath, JSON.stringify(rawData, null, 2))
+    console.log(`[DataLoader] Successfully updated raw record ${id}`)
+    
+    // Step 5: Enrich record with _meta_ fields
+    let enrichedRecord = enrichRecord(updatedRecord)
+    
+    // Step 6: Handle AI metadata updates if provided
+    if (aiMetaUpdates && Object.keys(aiMetaUpdates).length > 0) {
+      try {
+        // Create LLMEnricher instance to update cache
+        const defaultConfig = {
+          batchSize: 5,
+          cacheFile: 'ai_meta_index.json',
+          promptVersion: '2.0.0'
+        }
+        const enricher = new LLMEnricher(defaultConfig, () => {})
+        
+        // Compute hash for the record
+        const hash = enricher.computeRecordHash(updatedRecord)
+        
+        // Update AI metadata cache
+        const updatedAiMeta = await enricher.updateCachedMetadata(hash, aiMetaUpdates)
+        
+        // Attach updated AI metadata to the record
+        enrichedRecord._ai_meta = updatedAiMeta
+        console.log(`[DataLoader] Successfully updated AI metadata for record ${id}`)
+      } catch (aiError) {
+        console.error('[DataLoader] Error updating AI metadata:', aiError)
+        // Don't fail the whole operation, just log the error
+      }
+    }
+    
+    return {
+      success: true,
+      record: enrichedRecord
+    }
+  } catch (error) {
+    console.error('[DataLoader] Error updating record:', error)
+    return {
+      success: false,
+      error: error.message
+    }
+  }
+}
+
+/**
  * 导出数据路径给外部使用
  */
 export { dataPath }

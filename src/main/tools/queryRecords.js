@@ -10,7 +10,7 @@
  * - hasQuotes: 是否包含金句
  */
 
-import { Tool, ToolResult } from './base.js'
+import { Tool, ToolResult, formatRecordForLLM, sanitizeRecordForUI } from './base.js'
 import { loadAndEnrichData } from '../data/index.js'
 
 export class QueryRecordsTool extends Tool {
@@ -123,7 +123,21 @@ AI 增强查询（新增）：
         
         limit: {
           type: 'number',
-          description: '返回结果数量限制（默认 20）'
+          description: '【已弃用】请使用 pageSize'
+        },
+        page: {
+          type: 'number',
+          description: '页码（默认 1）'
+        },
+        pageSize: {
+          type: 'number',
+          description: '每页数量（默认 20，最大 100）'
+        },
+        sortBy: {
+          type: 'string',
+          description: '排序方式',
+          enum: ['time_desc', 'time_asc', 'duration_desc', 'energy_desc'],
+          default: 'time_desc'
         }
       }
     }
@@ -144,7 +158,7 @@ AI 增强查询（新增）：
       }
 
       // 应用所有条件过滤
-      const filtered = data.filter(item => {
+      let filtered = data.filter(item => {
         let match = true
 
         // ==================== 基础维度过滤 ====================
@@ -284,20 +298,63 @@ AI 增强查询（新增）：
 
       console.log(`[QueryRecordsTool] Filtered ${filtered.length} from ${data.length} records`)
 
-      // 应用限制
-      const limit = input.limit || 20
-      const results = filtered.slice(0, limit)
+      // ==================== 排序逻辑 (新增) ====================
+      const sortBy = input.sortBy || 'time_desc'
+      filtered.sort((a, b) => {
+        if (sortBy === 'time_asc') return new Date(a.time) - new Date(b.time)
+        if (sortBy === 'time_desc') return new Date(b.time) - new Date(a.time)
+        if (sortBy === 'duration_desc') return (b._meta_duration_min || 0) - (a._meta_duration_min || 0)
+        if (sortBy === 'energy_desc') return (b._ai_meta?.energy_level || 0) - (a._ai_meta?.energy_level || 0)
+        return 0
+      })
+
+      // ==================== 分页逻辑 (新增) ====================
+      const page = Math.max(1, input.page || 1)
+      // 兼容旧的 limit 参数，优先使用 pageSize
+      let pageSize = Math.max(1, input.pageSize || input.limit || 20)
+      if (pageSize > 100) pageSize = 100 // 强制最大限制
+
+      const totalItems = filtered.length
+      const totalPages = Math.ceil(totalItems / pageSize)
+      const startIndex = (page - 1) * pageSize
+      const results = filtered.slice(startIndex, startIndex + pageSize)
+      const hasNextPage = page < totalPages
 
       // 统计 AI 增强情况
       const aiEnhancedCount = results.filter(item => item._ai_meta).length
 
+      // 构造系统提示
+      let systemHint = ''
+      if (hasNextPage) {
+        systemHint = `⚠️ 结果已分页：当前显示第 ${page}/${totalPages} 页（本页 ${results.length} 条，共 ${totalItems} 条）。
+【操作建议】
+1. 如需查看更多，请继续调用 query_records 工具，将 page 参数设置为 ${page + 1}。
+2. 如需查询特定内容，请尝试添加更多过滤条件（如 keywordsAll, moodTags）。`
+      } else if (totalItems > 100 && results.length > 0) {
+        // 虽然没有下一页（或者已经是最后一页），但如果总数巨大，提醒可以用 search_records
+         systemHint = `✅ 已加载全部 ${totalItems} 条数据。
+💡 提示：如果发现记录过多难以分析，建议使用 search_records 工具进行语义摘要（如"查询最近的感悟"）。`
+      }
+
+      // 格式化输出
+      // 1. 为 UI 准备对象数组（保留结构，移除大字段，修复前端显示为空的问题）
+      const uiRecords = results.map(sanitizeRecordForUI)
+      // 2. 为 LLM 准备纯文本摘要（节省 Token）
+      const llmText = results.map(formatRecordForLLM).join('\n\n')
+
       return new ToolResult(this.name, {
-        records: results,
-        totalCount: data.length,
-        matchedCount: filtered.length,
-        returnedCount: results.length,
+        records: uiRecords, // 修复：UI 需要对象结构才能渲染卡片
+        summary: llmText,   // 新增：LLM 请优先阅读此字段进行分析
+        pagination: {
+          page,
+          pageSize,
+          totalItems,
+          totalPages,
+          hasNextPage
+        },
         aiEnhancedCount,
-        conditions: input
+        conditions: input,
+        system_hint: systemHint
       })
     } catch (error) {
       console.error('[QueryRecordsTool] Error:', error)

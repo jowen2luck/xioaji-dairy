@@ -753,6 +753,55 @@ export class LLMEnricher {
             processing: this.processing
         }
     }
+
+    /**
+     * Update AI metadata cache for a specific record
+     * Used for manual edits that should persist without re-running LLM
+     * @param {string} hash - Record hash
+     * @param {Object} updates - Fields to update in the AI metadata
+     * @returns {Object} Updated AI metadata
+     */
+    async updateCachedMetadata(hash, updates) {
+        if (!this.cache.items[hash]) {
+            // Create new cache entry if doesn't exist
+            this.cache.items[hash] = {
+                timestamp: Date.now(),
+                data: {}
+            }
+        }
+
+        // Define which _ai_meta fields can be manually edited
+        const editableFields = [
+            'summary',
+            'energy_level',
+            'focus_level',
+            'key_quotes',
+            'people_involved',
+            'items',
+            'location',
+            'physiological_sensations'
+        ]
+
+        const existingData = this.cache.items[hash].data || {}
+        
+        // Apply updates only for editable fields
+        Object.keys(updates).forEach(key => {
+            if (editableFields.includes(key)) {
+                existingData[key] = updates[key]
+            }
+        })
+
+        this.cache.items[hash] = {
+            timestamp: Date.now(),
+            data: existingData,
+            manuallyEdited: true
+        }
+
+        await this.saveCache()
+        console.log(`[LLMEnricher] Updated cache for hash ${hash}:`, updates)
+        
+        return existingData
+    }
 }
 
 // ==================== API Key 映射 ====================

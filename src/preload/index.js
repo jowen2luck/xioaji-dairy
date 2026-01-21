@@ -29,7 +29,8 @@ const electronAPI = {
 const assistantAPI = {
   listModels: () => ipcRenderer.invoke('assistant:list-models'),
   chat: (payload) => ipcRenderer.invoke('assistant:chat', payload),
-  invokeTool: (name, args) => ipcRenderer.invoke('assistant:invoke-tool', { name, args })
+  invokeTool: (name, args) => ipcRenderer.invoke('assistant:invoke-tool', { name, args }),
+  updateRecord: (id, data, aiMetaData) => ipcRenderer.invoke('record:update', { id, data, aiMetaData })
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

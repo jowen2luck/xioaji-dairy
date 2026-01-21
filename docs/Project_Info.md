@@ -345,78 +345,95 @@
         timestamp: String            // 时间戳
       }
       ```
-  - `searchRecords.js`: 搜索记录工具，支持语义内容检索。
-    - **输入**: 
+  - `calendar.js` (calendar_resolver): 生产级时间解析器。
+    - **功能**: 将自然语言（如"上周"、"Q3"、"去年11月"）解析为精确的 ISO 时间范围。
+    - **输入**:
       ```javascript
       {
-        query: String,               // 搜索关键词
-        conditions: Object           // 过滤条件（支持时间范围和情绪过滤）
+        query: String,               // 时间表达
+        baseDate: String             // 基准时间 ISO (可选)
       }
       ```
     - **输出**:
       ```javascript
       {
-        records: Array,              // 搜索结果
-        debug: Object                // 调试信息
+        type: 'range',
+        start: String,               // 开始时间 ISO
+        end: String,                 // 结束时间 ISO
+        description: String,         // 描述
+        sql_between: String          // SQL 片段
       }
       ```
-    - **增强功能**:
-      - 支持向量语义搜索，擅长理解内容含义而非精确匹配
-      - 支持 conditions.dateRange 参数进行时间范围后置过滤
-      - 支持 conditions.emotionFocus 参数进行情绪倾向过滤
-      - 在模糊回忆场景下，可与 calendar_resolver 配合使用实现"在特定时间范围内进行语义搜索"
-  - `queryRecords.js`: 精确查询工具，支持结构化条件查询。
+  - `metadata.js` (metadata_explorer): 元数据探索器。
+    - **功能**: 查询数据库中已存在的标签、人物、物品等元数据，作为"数据库黄页"。
+    - **输入**:
+      ```javascript
+      {
+        field: String,               // 字段类型: people_involved, mood_tags, items, locations, projects, content_type
+        search: String,              // 模糊搜索关键词 (可选)
+        limit: Number                // 限制数量
+      }
+      ```
+  - `searchRecords.js` (search_records): 语义搜索工具。
+    - **功能**: 基于向量的语义检索，支持多粒度切片（宏观+微观）和 Max-Sim 算法。
     - **输入**: 
       ```javascript
       {
-        dateRange: Object,           // 日期范围
+        query: String,               // 搜索意象/关键词
+        limit: Number,               // 结果数量限制
+        minScore: Number,            // 最小相似度
+        conditions: {                // 后置过滤条件
+           dateRange: { start, end },
+           emotionFocus: String      // 'worst'
+        }
+      }
+      ```
+  - `queryRecords.js` (query_records): 精确查询工具。
+    - **功能**: 支持结构化条件查询，包含基础维度和 AI 元数据维度。
+    - **输入**: 
+      ```javascript
+      {
+        // 基础维度
+        dateRange: { start, end },   // 时间范围
         project: String,             // 项目名称
         weekday: String,             // 星期几
         isWeekend: Boolean,          // 是否周末
         timeRange: String,           // 时间段
-        durationMin: Number,         // 最小时长
-        durationMax: Number,         // 最大时长
-        contentKeyword: String,      // 内容关键词（⚠️仅限精确匹配单词或短语，如"开心"、"项目A"）。如果用户输入的是长句子或模糊描述（如"好像写到了..."），严禁使用此字段，请改用 search_records 工具进行语义检索！
+        durationMin/Max: Number,     // 时长范围
+        keywordsAny/All/Exclude: [], // 关键词逻辑
+        
+        // AI 元数据维度
         moodTags: Array,             // 情绪标签
-        minEnergyLevel: Number,      // 最小能量值
-        maxEnergyLevel: Number,      // 最大能量值
+        min/maxEnergyLevel: Number,  // 能量值范围
         peopleInvolved: String,      // 涉及人物
         contentType: String,         // 内容体裁
         hasQuotes: Boolean,          // 是否包含金句
-        limit: Number                // 限制结果数
+        
+        // 分页与排序
+        page: Number,
+        pageSize: Number,
+        sortBy: String
       }
       ```
-    - **输出**:
-      ```javascript
-      {
-        records: Array,              // 查询结果
-        totalCount: Number,          // 总记录数
-        matchedCount: Number,        // 匹配记录数
-        returnedCount: Number,       // 返回记录数
-        aiEnhancedCount: Number      // AI增强记录数
-      }
-      ```
-  - `sqlAnalysis.js`: SQL 分析工具，执行多维度统计分析。
+  - `sqlAnalysis.js` (sql_analysis): SQL 基础统计工具。
+    - **功能**: 执行客观数据的聚合统计（计数、求和、平均值）。
     - **输入**: 
       ```javascript
       {
-        analysisType: String,        // 分析类型
-        params: Object               // 分析参数
+        analysisType: String,        // 分析类型: summary, by_project, by_time, mood_trend, energy_trend, general_aggregation 等
+        params: Object               // 分析参数 (limit, groupBy, dimension 等)
       }
       ```
-    - **输出**:
+  - `insight.js` (insight_analyst): 深度洞察分析器。
+    - **功能**: 处理相关性、网络分析、心理分布等深度问题。
+    - **输入**: 
       ```javascript
       {
-        analysisType: String,        // 分析类型
-        data: Array/Object,          // 分析结果
-        recordCount: Number,         // 记录数
-        aiEnhancedCount: Number,     // AI增强记录数
-        isAIAnalysis: Boolean        // 是否为AI分析
+        analysisType: String,        // 分析类型: emotion_energy_correlation, people_network, biorhythm_stats, context_cloud 等
+        params: Object               // 分析参数 (filter_project, filter_date_range 等)
       }
       ```
   - `registry.js`: 工具注册表，管理所有可用的工具实例。
-    - **输入**: 工具实例
-    - **输出**: 工具实例或工具元数据
   - `index.js`: 工具模块导出。
 
 ### 2. 渲染进程模块 (src/renderer/)

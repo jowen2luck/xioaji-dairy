@@ -1,5 +1,43 @@
 @import './base.css';
 
+/* ============================================
+   Parchment Theme Variables
+   ============================================ */
+
+/* Light Mode (Parchment) */
+[data-theme="light"] {
+  --bg-parchment: #FDF9F3;
+  --bg-parchment-soft: #F5F0E8;
+  --bg-parchment-mute: #EDE8E0;
+  --text-charcoal: #3A3B3C;
+  --text-sepia: #5A4A3C;
+  --text-muted: #8A7A6A;
+  --accent-gold: #C8AE7D;
+  --accent-gold-light: rgba(200, 174, 125, 0.3);
+  --accent-gold-hover: #B89D6D;
+  --border-subtle: rgba(200, 174, 125, 0.5);
+  --border-light: rgba(200, 174, 125, 0.25);
+  --energy-color: #C8AE7D;
+  --focus-color: #5A4A3C;
+}
+
+/* Dark Mode - Adjusted parchment colors for dark theme */
+[data-theme="dark"] {
+  --bg-parchment: #1b1b1f;
+  --bg-parchment-soft: #222226;
+  --bg-parchment-mute: #2a2a2e;
+  --text-charcoal: rgba(255, 255, 245, 0.86);
+  --text-sepia: rgba(235, 225, 200, 0.8);
+  --text-muted: rgba(200, 190, 170, 0.5);
+  --accent-gold: #C8AE7D;
+  --accent-gold-light: rgba(200, 174, 125, 0.2);
+  --accent-gold-hover: #D8BE8D;
+  --border-subtle: rgba(200, 174, 125, 0.35);
+  --border-light: rgba(200, 174, 125, 0.15);
+  --energy-color: #C8AE7D;
+  --focus-color: rgba(235, 225, 200, 0.6);
+}
+
 body {
   overflow: auto;
   background: var(--color-background);

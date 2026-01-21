@@ -103,13 +103,16 @@ export function analyzeIntent(query, availableTools = []) {
   const intentContext = analyzeIntentByKeywords(query)
   
   // 将意图类型映射到工具
+  // 【更新】不再限制工具，允许所有工具可用
+  const allTools = ['search_records', 'query_records', 'sql_analysis', 'insight_analyst', 'metadata_explorer', 'calendar_resolver']
+  
   const intentToolMapping = {
-    search: ['search_records'],
-    query: ['query_records'],
-    statistical: ['sql_analysis'],
-    insight: ['insight_analyst'],
+    search: allTools,
+    query: allTools,
+    statistical: allTools,
+    insight: allTools,
     casual: [],
-    composite: ['query_records', 'sql_analysis']
+    composite: allTools
   }
   
   const recommendedTools = intentToolMapping[intentContext.primary_intent] || availableTools

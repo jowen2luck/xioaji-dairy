@@ -23,13 +23,14 @@ export class SqlAnalysisTool extends Tool {
 - weekday_weekend → 无需 params
 - mood_trend → 无需 params
 - top_projects → params.limit (可选)
-- mood_distribution → 无选 params
-- energy_trend → params.groupBy (必须。'week'/'month')
-- content_type_ratio → 无需 params
-- life_composition → 无需 params
+- mood_distribution → 无选 params (⚠️ 需要 AI 元数据)
+- energy_trend → params.groupBy (必须。'week'/'month') (⚠️ 需要 AI 元数据)
+- content_type_ratio → 无需 params (⚠️ 需要 AI 元数据)
+- life_composition → 无需 params (⚠️ 需要 AI 元数据)
 - general_aggregation → params.groupByField / params.timeUnit / params.metric / params.targetField
 
-注意：此工具专注于基础统计（计数、求和、平均值）。深度洞察分析（相关性、归因、心理分析）请使用 insight_analyst 工具。`
+注意：此工具专注于基础统计（计数、求和、平均值）。深度洞察分析（相关性、归因、心理分析）请使用 insight_analyst 工具。
+⚠️ 重要：带有 (⚠️ 需要 AI 元数据) 标记的分析类型，依赖于 LLM 预处理生成的元数据（如 mood_tags, energy_level）。如果尚未运行 AI 分析，这些查询将返回错误或空结果。`
     this.schema = {
       type: 'object',
       properties: {
@@ -103,6 +104,39 @@ export class SqlAnalysisTool extends Tool {
 
       console.log(`[SqlAnalysisTool] Executing ${analysisType} on ${data.length} records`)
 
+      // 智能预检：检查是否请求了 AI 分析但缺少 AI 数据
+      const aiEnhancedCount = data.filter(item => item._ai_meta).length
+      const isAIAnalysis = [
+        'mood_distribution', 'energy_trend', 'content_type_ratio', 'life_composition'
+      ].includes(analysisType)
+
+      if (isAIAnalysis) {
+        // 1. 检查是否存在任何 AI 元数据
+        if (aiEnhancedCount === 0) {
+          console.warn('[SqlAnalysisTool] Blocked AI analysis due to missing metadata')
+          return new ToolResult(this.name, {
+            error: '数据缺失 AI 元信息',
+            message: '当前尚未生成 AI 分析数据（如情绪、能量值等）。请先运行 AI 分析流程。',
+            suggestion: '无法执行此分析，因为没有 AI 元数据。请告知用户需要先运行数据处理流程。',
+            recordCount: data.length,
+            aiEnhancedCount: 0
+          }, true) // isError=true 强制停止模型重试
+        }
+
+        // 2. 针对特定分析类型的字段级检查
+        if (analysisType === 'energy_trend') {
+          const hasEnergy = data.some(r => r._ai_meta && typeof r._ai_meta.energy_level === 'number')
+          if (!hasEnergy) {
+            return new ToolResult(this.name, {
+              error: '数据缺失能量值',
+              message: '虽然存在部分 AI 元数据，但未找到 energy_level 字段。',
+              suggestion: '请告知用户当前数据未包含能量趋势信息。',
+              aiEnhancedCount
+            }, true)
+          }
+        }
+      }
+
       // 通用聚合优先处理
       if (analysisType === 'general_aggregation') {
         return this.performGenericAggregation(data, params)
@@ -161,11 +195,7 @@ export class SqlAnalysisTool extends Tool {
 
       console.log(`[SqlAnalysisTool] Analysis type: ${analysisType}, returned ${Array.isArray(result) ? result.length : 1} results`)
 
-      // 统计 AI 增强数据情况
-      const aiEnhancedCount = data.filter(item => item._ai_meta).length
-      const isAIAnalysis = [
-        'mood_distribution', 'energy_trend', 'content_type_ratio', 'life_composition'
-      ].includes(analysisType)
+      // 统计 AI 增强数据情况 (复用顶部已计算的变量)
 
       return new ToolResult(this.name, {
         analysisType,
@@ -193,17 +223,27 @@ export class SqlAnalysisTool extends Tool {
         let key = 'Unknown'
         
         // 1. 获取分组 Key
-        if (timeUnit && item.time) {
+        // 优先使用 groupByField，如果没有指定则尝试使用 item.time (兼容默认时间字段)
+        let rawValue = null
+        if (groupByField) {
+            rawValue = this.getNestedValue(item, groupByField)
+        }
+        
+        // 如果没有找到值且没有指定 groupByField (或者值为空)，回退到默认 time 字段
+        if (!rawValue && item.time) {
+            rawValue = item.time
+        }
+
+        if (timeUnit && rawValue) {
             // Day.js 强大的时间格式化
-            key = dayjs(item.time).format(
+            key = dayjs(rawValue).format(
                 timeUnit === 'year' ? 'YYYY' :
                 timeUnit === 'month' ? 'YYYY-MM' :
                 timeUnit === 'week' ? 'YYYY-[W]WW' : // ISO Week
                 'YYYY-MM-DD'
             )
-        } else if (groupByField) {
-            // 支持深层属性访问 (e.g. _ai_meta.energy_level)
-            key = this.getNestedValue(item, groupByField) || 'Unknown'
+        } else if (rawValue) {
+             key = rawValue
         }
 
         // 处理数组类型的 Key (如 mood_tags)，这会导致一条记录归属多个组

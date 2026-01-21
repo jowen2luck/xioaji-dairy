@@ -1,6 +1,6 @@
 <script setup>
 import Dashboard from './components/Dashboard.vue'
-import { NConfigProvider, darkTheme } from 'naive-ui'
+import { NConfigProvider, NMessageProvider, darkTheme } from 'naive-ui'
 import { ref, computed, onMounted } from 'vue'
 import { initTheme, getCurrentTheme, setTheme } from './utils/theme.js'
 
@@ -40,7 +40,9 @@ onMounted(() => {
 
 <template>
   <NConfigProvider :theme="theme">
-    <Dashboard />
+    <NMessageProvider>
+      <Dashboard />
+    </NMessageProvider>
   </NConfigProvider>
 </template>
 

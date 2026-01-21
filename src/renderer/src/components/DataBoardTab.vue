@@ -66,6 +66,7 @@
                   :record="item"
                   @tag-click="handleTagClick"
                   @request-analysis="handleRequestAnalysis"
+                  @refresh="refreshDataSilently"
                 />
                 <RecordCard
                   v-else

@@ -1,12 +1,15 @@
 /**
  * 直接调用 OpenAI 兼容 API，绕过 LangChain 的可能问题
+ * 支持深度思考功能 (enable_thinking)
  */
 
 import https from 'https'
+import http from 'http'
 
 // 定义不同 baseURL 对应的 API Key 环境变量映射
 const API_KEY_MAP = {
   'https://dashscope.aliyuncs.com/compatible-mode/v1': 'DASHSCOPE_API_KEY_QWEN',
+  'https://dashscope.aliyuncs.com/api/v1': 'DASHSCOPE_API_KEY',  // 新增：百炼 API 端点
   'https://uni-api.cstcloud.cn/v1': 'DASHSCOPE_API_KEY_SCTCLOUD',
   'https://api.openai.com/v1': 'OPENAI_API_KEY'
 }
@@ -37,6 +40,7 @@ function getAPIKeyForBaseURL(baseURL) {
  * @param {Array} config.tools - 工具列表（可选）
  * @param {number} config.temperature - 温度参数（可选）
  * @param {number} config.top_p - Top P 参数（可选）
+ * @param {boolean} config.enableThinking - 启用深度思考（可选）
  * @returns {Promise<object>} - API 响应
  */
 export async function callOpenAIAPI(options) {
@@ -48,6 +52,7 @@ export async function callOpenAIAPI(options) {
     temperature = 0.7,
     top_p = 0.9,
     apiKey: providedApiKey,
+    enableThinking = false,  // 新增：深度思考参数
     maxRetries = 2  // 添加重试参数
   } = options
 
@@ -79,7 +84,7 @@ export async function callOpenAIAPI(options) {
     throw new Error(`Invalid baseURL: ${baseURLOrigin}, error: ${e.message}`)
   }
   
-  const protocol = url.protocol === 'https:' ? https : http
+    const protocol = url.protocol === 'https:' ? https : http
 
   const payload = {
     model,
@@ -88,8 +93,14 @@ export async function callOpenAIAPI(options) {
     top_p,
   }
   
-  // 如果有工具定义，添加到 payload
-  if (Array.isArray(tools) && tools.length > 0) {
+  // 新增：如果启用深度思考，添加参数
+  if (enableThinking) {
+    payload.enable_thinking = true
+  }
+  
+  // DeepSeek v3.1 限制：启用思维模式时不支持函数调用
+  // 如果有工具定义且未启用思维模式，才添加到 payload
+  if (Array.isArray(tools) && tools.length > 0 && !enableThinking) {
     payload.tools = tools
   }
 
@@ -119,10 +130,16 @@ export async function callOpenAIAPI(options) {
             if (res.statusCode === 200) {
               const response = JSON.parse(data)
               console.log('[DirectOpenAI] Response:', JSON.stringify(response, null, 2))
+              
+              // 提取思考内容（DashScope 格式）
+              const reasoningContent = response.output?.choices?.[0]?.message?.reasoning_content 
+                || response.choices?.[0]?.message?.reasoning_content
+              
               resolve({
-                content: response.choices?.[0]?.message?.content || '',
-                choices: response.choices,
-                tool_calls: response.choices?.[0]?.message?.tool_calls,
+                content: response.output?.choices?.[0]?.message?.content || response.choices?.[0]?.message?.content || '',
+                choices: response.output?.choices || response.choices,
+                tool_calls: response.output?.choices?.[0]?.message?.tool_calls || response.choices?.[0]?.message?.tool_calls,
+                reasoning_content: reasoningContent,  // 新增：推理内容
                 raw: response,
               })
             } else {
