@@ -38,17 +38,17 @@
         <n-grid :x-gap="16" :y-gap="16" :cols="24" class="mt-4">
           <!-- 生活重心 -->
           <n-gi :span="12">
-            <LifeCompositionCard />
+            <LifeCompositionCard :refresh-key="refreshKey" />
           </n-gi>
           
           <!-- 物与境 -->
           <n-gi :span="12">
-            <ContextCloudCard />
+            <ContextCloudCard :refresh-key="refreshKey" />
           </n-gi>
           
           <!-- 律动 -->
           <n-gi :span="24">
-            <ActivityCalendarCard />
+            <ActivityCalendarCard :refresh-key="refreshKey" />
           </n-gi>
         </n-grid>
       </section>
@@ -65,17 +65,17 @@
         <n-grid :x-gap="16" :y-gap="16" :cols="24" class="mt-4">
           <!-- 能量气象站 -->
           <n-gi :span="24">
-            <EnergyWeatherCard />
+            <EnergyWeatherCard :refresh-key="refreshKey" />
           </n-gi>
           
           <!-- 需求金字塔 -->
           <n-gi :span="12">
-            <PyramidCard />
+            <PyramidCard :refresh-key="refreshKey" />
           </n-gi>
           
           <!-- 时空锚点 -->
           <n-gi :span="12">
-            <TemporalAnchorCard />
+            <TemporalAnchorCard :refresh-key="refreshKey" />
           </n-gi>
         </n-grid>
       </section>
@@ -92,17 +92,17 @@
         <n-grid :x-gap="16" :y-gap="16" :cols="24" class="mt-4">
           <!-- 共振分析 -->
           <n-gi :span="24">
-            <ResonanceAnalysisCard />
+            <ResonanceAnalysisCard :refresh-key="refreshKey" />
           </n-gi>
           
           <!-- 状态象限 -->
           <n-gi :span="12">
-            <StateMatrixCard />
+            <StateMatrixCard :refresh-key="refreshKey" />
           </n-gi>
           
           <!-- 因果链路 -->
           <n-gi :span="12">
-            <CausalityChainCard />
+            <CausalityChainCard :refresh-key="refreshKey" />
           </n-gi>
         </n-grid>
       </section>
@@ -135,10 +135,14 @@ import StateMatrixCard from './charts/containers/StateMatrixCard.vue'
 import CausalityChainCard from './charts/containers/CausalityChainCard.vue'
 
 const loading = ref(false)
+const refreshKey = ref(0)
 
 const refreshAll = () => {
-  // TODO: 触发所有子组件刷新
-  window.location.reload()
+  loading.value = true
+  refreshKey.value += 1
+  window.setTimeout(() => {
+    loading.value = false
+  }, 800)
 }
 
 const exportReport = () => {

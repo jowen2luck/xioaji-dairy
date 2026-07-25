@@ -12,6 +12,7 @@
 
 import { Tool, ToolResult, formatRecordForLLM, sanitizeRecordForUI } from './base.js'
 import { loadAndEnrichData } from '../data/index.js'
+import { getSummaryService } from '../etl/summaryService.js'
 
 export class QueryRecordsTool extends Tool {
   constructor() {
@@ -30,6 +31,7 @@ AI 增强查询（新增）：
 - 能量值筛选："能量值大于7的记录"
 - 人际筛选："涉及导师的记录"
 - 体裁筛选："所有深度反思类记录"
+- 总结筛选："某个时间段的总结"
 - 智慧筛选："包含金句的记录"
 
 关键词查询策略：
@@ -114,7 +116,7 @@ AI 增强查询（新增）：
         },
         contentType: {
           type: 'string',
-          description: '内容体裁（使用 _ai_meta.content_type 字段）。可选值：DailyLog/Reflection/Letter/Idea'
+          description: '内容体裁（Summary 走总结类型，其它使用 _ai_meta.content_type 字段）。可选值：DailyLog/Reflection/Letter/Idea/Summary'
         },
         hasQuotes: {
           type: 'boolean',
@@ -148,8 +150,10 @@ AI 增强查询（新增）：
       console.log('[QueryRecordsTool] Received conditions:', JSON.stringify(input, null, 2))
 
       const data = await loadAndEnrichData()
+      const summaries = getSummaryService().getSummaries()
+      const sourceData = input.contentType === 'Summary' ? summaries : data
 
-      if (data.length === 0) {
+      if (sourceData.length === 0) {
         return new ToolResult(this.name, {
           records: [],
           message: '暂无数据',
@@ -158,22 +162,30 @@ AI 增强查询（新增）：
       }
 
       // 应用所有条件过滤
-      let filtered = data.filter(item => {
+      let filtered = sourceData.filter(item => {
         let match = true
 
         // ==================== 基础维度过滤 ====================
         
         // 1. 日期范围
         if (input.dateRange) {
-          if (item.time) {
+          const rangeStart = input.dateRange.start ? new Date(input.dateRange.start) : null
+          const rangeEnd = input.dateRange.end ? new Date(input.dateRange.end) : null
+          if (rangeEnd) rangeEnd.setHours(23, 59, 59, 999)
+
+          if (input.contentType === 'Summary' && item._type === 'summary' && item._summary_period?.start && item._summary_period?.end) {
+            const periodStart = new Date(item._summary_period.start)
+            const periodEnd = new Date(item._summary_period.end)
+            periodEnd.setHours(23, 59, 59, 999)
+            if (rangeStart) match = match && periodEnd >= rangeStart
+            if (rangeEnd) match = match && periodStart <= rangeEnd
+          } else if (item.time) {
             const itemDate = new Date(item.time)
-            if (input.dateRange.start) {
-              match = match && itemDate >= new Date(input.dateRange.start)
+            if (rangeStart) {
+              match = match && itemDate >= rangeStart
             }
-            if (input.dateRange.end) {
-              const endDate = new Date(input.dateRange.end)
-              endDate.setHours(23, 59, 59, 999)
-              match = match && itemDate <= endDate
+            if (rangeEnd) {
+              match = match && itemDate <= rangeEnd
             }
           } else {
             match = false
@@ -211,7 +223,7 @@ AI 增强查询（新增）：
         // 7. 内容关键词结构化匹配 (keywordsAny, keywordsAll, keywordsExclude)
         if (match) {
           // 合并所有文本字段用于关键词匹配
-          const text = [item.ganshou, item.shanggexiangmu, item.chixushijian, item.summary]
+          const text = [item.ganshou, item.shanggexiangmu, item.chixushijian, item.summary, item.content]
             .filter(Boolean)
             .join(' ')
             .toLowerCase()
@@ -276,7 +288,11 @@ AI 增强查询（新增）：
 
         // 11. 内容体裁
         if (input.contentType && match) {
-          if (item._ai_meta) {
+          if (input.contentType === 'Summary') {
+            match = match && item._type === 'summary'
+          } else if (item._type === 'summary') {
+            match = false
+          } else if (item._ai_meta) {
             match = match && item._ai_meta.content_type === input.contentType
           } else {
             match = false
@@ -322,6 +338,7 @@ AI 增强查询（新增）：
 
       // 统计 AI 增强情况
       const aiEnhancedCount = results.filter(item => item._ai_meta).length
+      const hasSummaryResults = results.some(item => item._type === 'summary')
 
       // 构造系统提示
       let systemHint = ''
@@ -334,6 +351,10 @@ AI 增强查询（新增）：
         // 虽然没有下一页（或者已经是最后一页），但如果总数巨大，提醒可以用 search_records
          systemHint = `✅ 已加载全部 ${totalItems} 条数据。
 💡 提示：如果发现记录过多难以分析，建议使用 search_records 工具进行语义摘要（如"查询最近的感悟"）。`
+      }
+      if (input.contentType === 'Summary' || hasSummaryResults) {
+        const summaryHint = '📝 提示：总结属于感性描述与分析，适合做阶段性回顾。'
+        systemHint = systemHint ? `${systemHint}\n\n${summaryHint}` : summaryHint
       }
 
       // 格式化输出

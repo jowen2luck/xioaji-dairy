@@ -29,6 +29,9 @@ export class AgentExecutor {
       temperature: config.temperature ?? 0.7,
       top_p: config.top_p ?? 0.9,
       maxIterations: config.maxIterations || 3,
+      eventEmitter: config.eventEmitter,
+      requestId: config.requestId,
+      streamFinal: config.streamFinal ?? true,
       ...config
     }
 
@@ -48,6 +51,15 @@ export class AgentExecutor {
       messageHistory: [],
       errors: []
     }
+    this._finalStreamStarted = false
+  }
+
+  emit(type, data) {
+    const fn = this.config.eventEmitter
+    if (typeof fn !== 'function') return
+    try {
+      fn({ type, data })
+    } catch {}
   }
 
   /**
@@ -138,6 +150,16 @@ export class AgentExecutor {
             timestamp: new Date().toISOString()
           })
 
+          this.emit('step', {
+            step: {
+              iteration,
+              action: 'final_answer',
+              reasoning: '已生成最终回复',
+              reasoning_content: reasoningContent,
+              timestamp: new Date().toISOString()
+            }
+          })
+
           return {
             success: true,
             content: reasoning,
@@ -152,6 +174,32 @@ export class AgentExecutor {
         // 3.3 执行工具调用
         console.log(`[AgentExecutor] Iteration ${iteration}: Executing ${toolCalls.length} tool(s)`)
         console.log(`[AgentExecutor] LLM reasoning before tool call:`, reasoning || '(无显式推理)')
+
+        const toolDescriptors = toolCalls.map(tc => {
+          try {
+            return {
+              name: tc.name,
+              args: typeof tc.args === 'string' ? JSON.parse(tc.args || '{}') : tc.args
+            }
+          } catch (e) {
+            return {
+              name: tc.name,
+              args: { raw: tc.args, error: 'Invalid JSON' }
+            }
+          }
+        })
+
+        this.emit('step', {
+          step: {
+            iteration,
+            action: 'thinking',
+            reasoning: reasoning || `需要使用工具 ${toolCalls.map(tc => tc.name).join('、')} 来获取信息`,
+            reasoning_content: reasoningContent,
+            tools: toolDescriptors,
+            timestamp: new Date().toISOString()
+          }
+        })
+
         const toolResults = await this.handleToolCalls(toolCalls)
 
         // 记录本轮步骤（包含思考内容、工具调用和结果）
@@ -160,21 +208,21 @@ export class AgentExecutor {
           action: 'tool_calls',
           reasoning: reasoning || `需要使用工具 ${toolCalls.map(tc => tc.name).join('、')} 来获取信息`,
           reasoning_content: reasoningContent,  // 新增：推理过程
-          tools: toolCalls.map(tc => {
-            try {
-              return {
-                name: tc.name,
-                args: typeof tc.args === 'string' ? JSON.parse(tc.args || '{}') : tc.args
-              }
-            } catch (e) {
-              return {
-                name: tc.name,
-                args: { raw: tc.args, error: 'Invalid JSON' }
-              }
-            }
-          }),
+          tools: toolDescriptors,
           results: toolResults,
           timestamp: new Date().toISOString()
+        })
+
+        this.emit('step', {
+          step: {
+            iteration,
+            action: 'tool_calls',
+            reasoning: reasoning || `需要使用工具 ${toolCalls.map(tc => tc.name).join('、')} 来获取信息`,
+            reasoning_content: reasoningContent,
+            tools: toolDescriptors,
+            results: toolResults,
+            timestamp: new Date().toISOString()
+          }
         })
 
         // 3.4 将工具调用和结果添加到消息历史
@@ -229,6 +277,8 @@ export class AgentExecutor {
         message: error.message,
         stack: error.stack
       })
+
+      this.emit('error', { message: error.message, timestamp: new Date().toISOString() })
 
       return {
         success: false,
@@ -286,8 +336,33 @@ export class AgentExecutor {
           hasReasoning: !!response.reasoning_content  // 记录推理内容
         })
       } else {
-        // 没有工具，使用 LangChain 调用
-        response = await this.llm.invoke(messages)
+        const { callOpenAIAPI } = await import('../llm/directOpenAI.js')
+        if (this.config.streamFinal && this.config.eventEmitter && !this._finalStreamStarted) {
+          this._finalStreamStarted = true
+          this.emit('final_start', { timestamp: new Date().toISOString() })
+        }
+        const apiResponse = await callOpenAIAPI({
+          baseURL: this.config.baseURL || this.config.selectedBaseURL,
+          model: this.config.model || this.config.selectedModel,
+          messages: messages,
+          tools: [],
+          temperature: this.config.temperature,
+          top_p: this.config.top_p,
+          enableThinking: false,
+          onContentDelta: this.config.streamFinal && this.config.eventEmitter
+            ? (delta) => this.emit('final_delta', { delta })
+            : undefined
+        })
+        if (this.config.streamFinal && this.config.eventEmitter) {
+          this.emit('final_end', { timestamp: new Date().toISOString() })
+        }
+
+        response = {
+          content: apiResponse.content || '',
+          tool_calls: apiResponse.tool_calls || [],
+          reasoning_content: apiResponse.reasoning_content,
+          raw: apiResponse
+        }
       }
 
       console.log('[AgentExecutor] LLM response received:', {
@@ -404,6 +479,9 @@ export class AgentExecutor {
 2. **时间严谨性**：如果用户提到相对时间（如"上周"、"昨天"、"最近"），**必须第一步调用 calendar_resolver 工具**获取精确的 ISO 日期范围。严禁自己估算日期。
 3. **循序渐进**：不要尝试在一个步骤中完成所有操作。先获取时间/元数据，拿到结果后再调用查询工具。
 4. **工具优先**：当用户询问"有没有"、"是多少"、"什么时候"时，倾向于先调用工具查询，而不是直接回答。
+5. **工具链路**：先用 \`metadata_explorer\` 核对人物/项目/标签的准确值，再用 \`query_records\` 或 \`sql_analysis\` 做检索与基础统计，最后才用 \`insight_analyst\` 做深度关联与规律分析。
+6. **边界清晰**：\`sql_analysis\` 只做客观统计；\`insight_analyst\` 只做模式与关联分析；\`metadata_explorer\` 只做元数据查找。
+7. **前置依赖**：\`sql_analysis\` 的 mood_distribution/energy_trend/content_type_ratio/life_composition 需要 AI 元数据；缺失时先提示需要运行 AI 元数据处理。
 `
 
     // 注入意图上下文（如果有）

@@ -77,6 +77,9 @@ export function formatRecordForLLM(item) {
   if (item._ai_meta && item._ai_meta.summary) {
     parts.push(`摘要：${item._ai_meta.summary}`)
   }
+  if (item._type === 'summary' && item.content) {
+    parts.push(`总结：${item.content}`)
+  }
   
   // 原始内容 (如果没有摘要，或者作为补充)
   // 如果有摘要，原始内容可以略去，或者截断

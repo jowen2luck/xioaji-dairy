@@ -1,8 +1,8 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
-import xlsx from 'xlsx'
 import { join } from 'node:path'
+import { importExcelToJson, exportJsonToFile } from '../utils/diary-plugin/index.js'
 
 // LangChain 1.0 集成
 import { registerIPCHandlers } from './agent/ipcHandlers.js'
@@ -49,6 +49,66 @@ const indexHtml = join(__dirname, '../renderer/index.html')
 // 开发环境中 Vite 开发服务器的 URL
 // process.env['ELECTRON_RENDERER_URL'] 是由 electron-vite CLI 自动设置的
 const url = process.env['ELECTRON_RENDERER_URL']
+
+function getAppConfigPath() {
+  return path.join(app.getPath('userData'), 'app-config.json')
+}
+
+function readAppConfig() {
+  try {
+    const p = getAppConfigPath()
+    if (!fs.existsSync(p)) return {}
+    const raw = fs.readFileSync(p, 'utf-8')
+    if (!raw || !raw.trim()) return {}
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return {}
+    return parsed
+  } catch {
+    return {}
+  }
+}
+
+function writeAppConfig(nextConfig) {
+  const userDataDir = app.getPath('userData')
+  fs.mkdirSync(userDataDir, { recursive: true })
+  const finalPath = getAppConfigPath()
+  const tmpPath = `${finalPath}.tmp`
+  const content = JSON.stringify(nextConfig ?? {}, null, 2)
+  fs.writeFileSync(tmpPath, content, 'utf-8')
+  fs.renameSync(tmpPath, finalPath)
+}
+
+ipcMain.on('settings:get-sync', (event, key) => {
+  const cfg = readAppConfig()
+  event.returnValue = cfg?.[key] ?? null
+})
+
+ipcMain.on('settings:set-sync', (event, payload) => {
+  try {
+    const { key, value } = payload || {}
+    if (!key || typeof key !== 'string') {
+      event.returnValue = false
+      return
+    }
+    const cfg = readAppConfig()
+    cfg[key] = value
+    writeAppConfig(cfg)
+    event.returnValue = true
+  } catch {
+    event.returnValue = false
+  }
+})
+
+ipcMain.on('settings:delete-sync', (event, key) => {
+  try {
+    const cfg = readAppConfig()
+    if (key && typeof key === 'string') delete cfg[key]
+    writeAppConfig(cfg)
+    event.returnValue = true
+  } catch {
+    event.returnValue = false
+  }
+})
 
 async function createWindow() {
   win = new BrowserWindow({
@@ -138,13 +198,15 @@ ipcMain.handle('open-file-dialog', async () => {
 
   try {
     const filePath = filePaths[0];
-    const workbook = xlsx.readFile(filePath);
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    return xlsx.utils.sheet_to_json(sheet);
+    const result = importExcelToJson(filePath, { autoEnrich: false });
+    // 返回校验后的原始记录供 save-data 使用
+    // 校验结果附带在 _validation 字段供前端提示
+    if (result.validation.stats.invalid > 0) {
+      console.warn(`[Main] 导入时发现 ${result.validation.stats.invalid} 条无效记录已自动跳过`);
+    }
+    return result.records;
   } catch (error) {
-    console.error('读取 Excel 文件时出错:', error);
-    return { error: '无法读取或解析文件' };
+    return { error: error.message };
   }
 });
 
@@ -318,11 +380,10 @@ ipcMain.handle('export-data', async (event, jsonData) => {
       return { success: false, message: '导出已取消' };
     }
 
-    fs.writeFileSync(filePath, jsonData);
-    return { success: true, message: '数据导出成功' };
+    return exportJsonToFile(filePath, jsonData);
   } catch (error) {
-    console.error('导出数据时出错:', error);
-    return { success: false, error: '导出数据失败: ' + error.message };
+    console.error('导出过程出错:', error);
+    return { success: false, error: '导出过程异常: ' + error.message };
   }
 });
 

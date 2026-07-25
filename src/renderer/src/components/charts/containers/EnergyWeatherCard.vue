@@ -109,10 +109,17 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { NCard, NSpace, NButton, NIcon, NSpin, NAlert, NDivider, NSelect, NProgress } from 'naive-ui'
 import { RefreshOutline } from '@vicons/ionicons5'
 import TrendLineChart from '../base/TrendLineChart.vue'
+
+const props = defineProps({
+  refreshKey: {
+    type: Number,
+    default: 0
+  }
+})
 
 const loading = ref(false)
 const error = ref(null)
@@ -176,7 +183,7 @@ async function fetchData() {
   try {
     const result = await window.electron.ipcRenderer.invoke(
       'tool-execute',
-      'sql_analysis',
+      'insight_analyst',
       {
         analysisType: 'biorhythm_stats',
         params: { groupBy: groupBy.value }
@@ -205,6 +212,13 @@ function refresh() {
 onMounted(() => {
   fetchData()
 })
+
+watch(
+  () => props.refreshKey,
+  () => {
+    fetchData()
+  }
+)
 </script>
 
 <style scoped>

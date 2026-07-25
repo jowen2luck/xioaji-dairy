@@ -3,7 +3,11 @@
  * 将 IPC 事件映射到代理执行
  */
 
-import { ipcMain } from 'electron'
+import { ipcMain, app, dialog } from 'electron'
+import fs from 'node:fs'
+import path from 'node:path'
+import https from 'https'
+import http from 'http'
 import { initializeModel } from '../llm/models.js'
 import { getToolRegistry } from '../tools/registry.js'
 import { AgentExecutor } from './executor.js'
@@ -23,7 +27,13 @@ export function registerIPCHandlers(config = {}) {
    */
   ipcMain.handle('assistant:chat', async (event, payload) => {
     try {
-      const { messages = [], model, baseURL, tools, config: userConfig, userQuery, mock, disableTools } = payload || {}
+      const { messages = [], model, baseURL, tools, config: userConfig, userQuery, mock, disableTools, requestId, extraBody } = payload || {}
+      const effectiveRequestId = requestId || `req_${Date.now()}_${Math.random().toString(16).slice(2)}`
+      const pushEvent = (evt) => {
+        try {
+          event.sender.send('assistant:event', { requestId: effectiveRequestId, ...evt })
+        } catch {}
+      }
 
       console.log('[IPC:chat] Received request', { model, userQuery })
 
@@ -132,14 +142,23 @@ export function registerIPCHandlers(config = {}) {
       if (disableTools === true) {
         console.log('[IPC:chat] Tools disabled, calling LLM only')
 
-        const response = await llm.invoke(messages)
-        const content = response.content || response.choices?.[0]?.message?.content || ''
+        const { callOpenAIAPI } = await import('../llm/directOpenAI.js')
+        const apiResponse = await callOpenAIAPI({
+          baseURL: baseURL,
+          model: model,
+          messages,
+          tools: [],
+          temperature: userConfig?.temperature ?? 0.7,
+          top_p: userConfig?.top_p ?? 0.9,
+          enableThinking: false,
+          extraBody: extraBody && typeof extraBody === 'object' ? extraBody : undefined,
+        })
 
         return {
           success: true,
           data: {
-            content: content,  // 添加 content 字段
-            raw: response,
+            content: apiResponse.content || '',
+            raw: apiResponse,
             toolResults: [],
             intentTools: [],
             debug: {
@@ -157,6 +176,9 @@ export function registerIPCHandlers(config = {}) {
         intentModel: userConfig?.intentModel, // 传递意图识别模型配置
         temperature: userConfig?.temperature ?? 0.7,
         top_p: userConfig?.top_p ?? 0.9,
+        requestId: effectiveRequestId,
+        eventEmitter: (evt) => pushEvent(evt),
+        streamFinal: true
       })
 
       // 【关键修改】"吸星大法" - 构造干净的消息列表
@@ -214,6 +236,7 @@ export function registerIPCHandlers(config = {}) {
       return {
         success: true,
         data: {
+          requestId: effectiveRequestId,
           content: result.content,  // ReAct 最终答案
           raw: result.raw || { choices: [{ message: { content: result.content } }] },
           toolResults: result.state.toolResults || [],
@@ -338,6 +361,40 @@ export function registerIPCHandlers(config = {}) {
     return baseURLs
   })
 
+  ipcMain.handle('assistant:save-image', async (_event, payload = {}) => {
+    try {
+      const src = payload?.src
+      if (!src || typeof src !== 'string') {
+        return { success: false, error: { message: 'Missing image src' } }
+      }
+
+      const defaultName = payload?.suggestedName && typeof payload.suggestedName === 'string'
+        ? payload.suggestedName
+        : `generated-${Date.now()}`
+      const defaultDir = (() => {
+        try { return app.getPath('pictures') } catch { return app.getPath('downloads') }
+      })()
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        defaultPath: path.join(defaultDir, `${defaultName}.png`),
+        filters: [
+          { name: 'PNG', extensions: ['png'] },
+          { name: 'JPEG', extensions: ['jpg', 'jpeg'] },
+          { name: 'WebP', extensions: ['webp'] },
+          { name: 'GIF', extensions: ['gif'] },
+          { name: 'SVG', extensions: ['svg'] },
+          { name: 'All Files', extensions: ['*'] },
+        ],
+      })
+
+      if (canceled || !filePath) return { success: false, canceled: true }
+
+      const savedPath = await saveImageToFile(src, filePath)
+      return { success: true, filePath: savedPath }
+    } catch (e) {
+      return { success: false, error: { message: e?.message || 'Save failed' } }
+    }
+  })
+
   /**
    * handler: assistant:list-tools
    * 列出可用的工具
@@ -430,14 +487,86 @@ export function unregisterIPCHandlers() {
   ipcMain.removeAllListeners('assistant:invoke-tool')
   ipcMain.removeAllListeners('tool-execute')
   ipcMain.removeAllListeners('assistant:list-models')
+  ipcMain.removeAllListeners('assistant:save-image')
   ipcMain.removeAllListeners('assistant:list-tools')
   ipcMain.removeAllListeners('assistant:analyze-intent')
   ipcMain.removeAllListeners('record:update')
 }
 
+function ensureFileExt(filePath, ext) {
+  const p = String(filePath || '')
+  if (/\.[a-zA-Z0-9]+$/.test(p)) return p
+  return p + ext
+}
+
+function parseDataImage(src) {
+  const m = String(src || '').match(/^data:image\/([a-zA-Z0-9.+-]+);base64,([\s\S]+)$/)
+  if (!m) return null
+  const mime = m[1].toLowerCase()
+  const b64 = m[2]
+  const ext = mime === 'jpeg' ? '.jpg' : mime === 'svg+xml' ? '.svg' : `.${mime.replace('+', 'plus')}`
+  return { b64, ext }
+}
+
+function downloadToFile(urlStr, outPath, maxRedirects = 4) {
+  return new Promise((resolve, reject) => {
+    let u
+    try { u = new URL(urlStr) } catch { reject(new Error('Invalid URL')); return }
+    const protocol = u.protocol === 'https:' ? https : http
+    const req = protocol.get(u, (res) => {
+      const status = res.statusCode || 0
+      const loc = res.headers.location
+      if ([301, 302, 303, 307, 308].includes(status) && loc && maxRedirects > 0) {
+        res.resume()
+        resolve(downloadToFile(new URL(loc, u).toString(), outPath, maxRedirects - 1))
+        return
+      }
+      if (status < 200 || status >= 300) {
+        let body = ''
+        res.on('data', (c) => { body += c.toString() })
+        res.on('end', () => reject(new Error(`HTTP ${status}: ${body}`)))
+        return
+      }
+      const file = fs.createWriteStream(outPath)
+      res.pipe(file)
+      file.on('finish', () => file.close(() => resolve(outPath)))
+      file.on('error', (err) => {
+        try { fs.unlinkSync(outPath) } catch {}
+        reject(err)
+      })
+    })
+    req.on('error', reject)
+  })
+}
+
+async function saveImageToFile(src, filePath) {
+  const data = parseDataImage(src)
+  if (data) {
+    const outPath = ensureFileExt(filePath, data.ext || '.png')
+    const buf = Buffer.from(data.b64, 'base64')
+    fs.writeFileSync(outPath, buf)
+    return outPath
+  }
+
+  if (/^https?:\/\//i.test(src)) {
+    let ext = '.png'
+    try {
+      const u = new URL(src)
+      const fromPath = path.extname(u.pathname || '')
+      if (fromPath && fromPath.length <= 6) ext = fromPath
+    } catch {}
+    const outPath = ensureFileExt(filePath, ext)
+    await downloadToFile(src, outPath)
+    return outPath
+  }
+
+  throw new Error('Unsupported image src')
+}
+
 // 定义不同 baseURL 对应的 API Key 环境变量映射
 const API_KEY_MAP = {
   'https://dashscope.aliyuncs.com/compatible-mode/v1': 'DASHSCOPE_API_KEY_QWEN',
+  'http://127.0.0.1:8045/v1': 'OPENAI_API_KEY',
   'https://uni-api.cstcloud.cn/v1': 'DASHSCOPE_API_KEY_SCTCLOUD',
   'https://api.openai.com/v1': 'OPENAI_API_KEY'
 }
@@ -455,5 +584,5 @@ function getAPIKeyForBaseURL(baseURL) {
   }
   
   // 如果没有找到特定的 API Key，则回退到默认的 API Key
-  return process.env.DASHSCOPE_API_KEY || process.env.OPENAI_API_KEY || ''
+  return process.env.ANTI_DASHSCOPE_API_KEY || process.env.DASHSCOPE_API_KEY || process.env.OPENAI_API_KEY || ''
 }

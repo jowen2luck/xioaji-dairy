@@ -557,7 +557,8 @@ export class LLMEnricher {
                         }
                     ],
                     temperature: this.config.temperature,
-                    response_format: { type: 'json_object' }
+                    response_format: { type: 'json_object' },
+                    stream: true
                 })
             })
 
@@ -573,6 +574,50 @@ export class LLMEnricher {
                 }
 
                 throw error
+            }
+
+            const contentType = response.headers.get('content-type') || ''
+            if (contentType.includes('text/event-stream')) {
+                let buffer = ''
+                let content = ''
+                const flushLine = (line) => {
+                    const trimmed = line.trim()
+                    if (!trimmed || !trimmed.startsWith('data:')) return
+                    const payloadStr = trimmed.slice(5).trim()
+                    if (!payloadStr || payloadStr === '[DONE]') return
+                    let parsed
+                    try {
+                        parsed = JSON.parse(payloadStr)
+                    } catch {
+                        return
+                    }
+                    const choice = parsed.output?.choices?.[0] || parsed.choices?.[0]
+                    const delta = choice?.delta || choice?.message || {}
+                    if (delta.content) content += delta.content
+                }
+                const decoder = new TextDecoder('utf-8')
+                for await (const chunk of response.body) {
+                    buffer += decoder.decode(chunk, { stream: true })
+                    const lines = buffer.split('\n')
+                    buffer = lines.pop() || ''
+                    for (const line of lines) {
+                        flushLine(line)
+                    }
+                }
+                if (buffer) {
+                    const lines = buffer.split('\n')
+                    for (const line of lines) {
+                        flushLine(line)
+                    }
+                }
+                if (!content) {
+                    throw new Error('Empty response from LLM')
+                }
+                console.log(`[LLMEnricher] ✅ LLM response received (${content.length} chars)`)
+                let cleanedContent = content.trim()
+                cleanedContent = cleanedContent.replace(/^```json\s*/i, '').replace(/\s*```$/i, '')
+                cleanedContent = cleanedContent.trim()
+                return JSON.parse(cleanedContent)
             }
 
             const data = await response.json()

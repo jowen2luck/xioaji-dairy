@@ -14,9 +14,13 @@ export class InsightAnalystTool extends Tool {
     this.description = `深度模式识别与关联分析。
 
 参数映射表:
+- life_composition -> 无需 params (⚠️ 需要 AI 元数据)
 - activity_calendar -> params.filter_date_range (建议提供)
 - context_cloud -> params.limit
 - biorhythm_stats -> params.groupBy
+- resonance_analysis -> params.dimension + (可选)阈值参数
+- state_matrix -> (可选) params.energyMidpoint / params.agencyMidpoint
+- causality_chain -> params.moodTag + (可选)params.limit
 - 其他 -> 支持通用过滤 (filter_project, filter_date_range)
 
 注意：此工具计算量大，请勿在大范围无过滤条件下频繁调用。`
@@ -35,7 +39,11 @@ export class InsightAnalystTool extends Tool {
             'temporal_stats',
             'wisdom_archive',
             'context_cloud',
-            'activity_calendar'
+            'activity_calendar',
+            'life_composition',
+            'resonance_analysis',
+            'state_matrix',
+            'causality_chain'
           ]
         },
         params: {
@@ -54,7 +62,15 @@ export class InsightAnalystTool extends Tool {
             limit: { type: 'number', description: '结果数量限制(用于 context_cloud, wisdom_archive)' },
             groupBy: { type: 'string', description: '时间分组方式(用于 biorhythm_stats: \'day\')\'week\')/\'month\')' },
             dimension_x: { type: 'string', description: '横向维度字段(用于散点图)' },
-            dimension_y: { type: 'string', description: '纵向维度字段(用于散点图)' }
+            dimension_y: { type: 'string', description: '纵向维度字段(用于散点图)' },
+            dimension: { type: 'string', description: '维度字段(用于 resonance_analysis: location|people_involved|items)' },
+            boosterThreshold: { type: 'number', description: '赋能者阈值(平均能量 >= 此值)' },
+            drainerThreshold: { type: 'number', description: '消耗者阈值(平均能量 <= 此值)' },
+            minOccurrences: { type: 'number', description: '最少出现次数才纳入统计' },
+            topN: { type: 'number', description: '榜单展示数量' },
+            energyMidpoint: { type: ['number', 'null'], description: '能量分界线(null 为动态中位数)' },
+            agencyMidpoint: { type: ['number', 'null'], description: '掌控感分界线(null 为动态中位数)' },
+            moodTag: { type: 'string', description: '情绪标签(用于 causality_chain)' }
           }
         }
       },
@@ -83,6 +99,137 @@ export class InsightAnalystTool extends Tool {
       
       const sqlService = getSqlService()
       let result
+
+      const aiEnhancedCount = data.filter(item => item._ai_meta).length
+      const isAIAnalysis = [
+        'emotion_energy_correlation',
+        'people_network',
+        'biorhythm_stats',
+        'psych_distribution',
+        'temporal_stats',
+        'wisdom_archive',
+        'context_cloud',
+        'life_composition',
+        'resonance_analysis',
+        'state_matrix',
+        'causality_chain'
+      ].includes(analysisType)
+
+      if (isAIAnalysis && aiEnhancedCount === 0) {
+        return new ToolResult(this.name, {
+          error: '数据缺失 AI 元信息',
+          message: '当前尚未生成 AI 分析数据（如情绪、能量值等）。请先运行 AI 分析流程。',
+          recordCount: data.length,
+          aiEnhancedCount: 0,
+          analysisType
+        }, true)
+      }
+
+      const hasSome = (predicate) => data.some(r => {
+        try {
+          return predicate(r)
+        } catch {
+          return false
+        }
+      })
+
+      if (analysisType === 'life_composition') {
+        const ok = hasSome(r => r._ai_meta && r._ai_meta.content_type)
+        if (!ok) {
+          return new ToolResult(this.name, {
+            error: '数据缺失生活重心信息',
+            message: '未找到 _ai_meta.content_type 字段，无法统计生活重心。请先运行 AI 分析流程。',
+            recordCount: data.length,
+            aiEnhancedCount
+          }, true)
+        }
+      }
+
+      if (analysisType === 'context_cloud') {
+        const ok = hasSome(r => r._ai_meta && (r._ai_meta.location || (Array.isArray(r._ai_meta.items) && r._ai_meta.items.length > 0)))
+        if (!ok) {
+          return new ToolResult(this.name, {
+            error: '数据缺失场域/器物信息',
+            message: '未找到 _ai_meta.location 或 _ai_meta.items 字段，无法生成词云。请先运行 AI 分析流程。',
+            recordCount: data.length,
+            aiEnhancedCount
+          }, true)
+        }
+      }
+
+      if (analysisType === 'biorhythm_stats') {
+        const ok = hasSome(r => r._ai_meta && (typeof r._ai_meta.energy_level === 'number' || typeof r._ai_meta.focus_level === 'number'))
+        if (!ok) {
+          return new ToolResult(this.name, {
+            error: '数据缺失能量/专注信息',
+            message: '未找到 _ai_meta.energy_level 或 _ai_meta.focus_level 字段，无法生成能量气象站。请先运行 AI 分析流程。',
+            recordCount: data.length,
+            aiEnhancedCount
+          }, true)
+        }
+      }
+
+      if (analysisType === 'psych_distribution') {
+        const ok = hasSome(r => r._ai_meta && r._ai_meta.maslow_need)
+        if (!ok) {
+          return new ToolResult(this.name, {
+            error: '数据缺失需求层次信息',
+            message: '未找到 _ai_meta.maslow_need 字段，无法生成需求金字塔。请先运行 AI 分析流程。',
+            recordCount: data.length,
+            aiEnhancedCount
+          }, true)
+        }
+      }
+
+      if (analysisType === 'temporal_stats') {
+        const ok = hasSome(r => r._ai_meta && r._ai_meta.time_orientation)
+        if (!ok) {
+          return new ToolResult(this.name, {
+            error: '数据缺失时间取向信息',
+            message: '未找到 _ai_meta.time_orientation 字段，无法生成时空锚点。请先运行 AI 分析流程。',
+            recordCount: data.length,
+            aiEnhancedCount
+          }, true)
+        }
+      }
+
+      if (analysisType === 'resonance_analysis') {
+        const dimension = params.dimension || 'location'
+        const ok = hasSome(r => r._ai_meta && typeof r._ai_meta.energy_level === 'number' && r._ai_meta[dimension])
+        if (!ok) {
+          return new ToolResult(this.name, {
+            error: '数据不足以进行共振分析',
+            message: `未找到同时包含 energy_level 与 ${dimension} 的记录。请先运行 AI 分析流程，或更换维度。`,
+            recordCount: data.length,
+            aiEnhancedCount
+          }, true)
+        }
+      }
+
+      if (analysisType === 'state_matrix') {
+        const ok = hasSome(r => r._ai_meta && typeof r._ai_meta.energy_level === 'number' && typeof r._ai_meta.agency_level === 'number')
+        if (!ok) {
+          return new ToolResult(this.name, {
+            error: '数据不足以生成状态象限',
+            message: '未找到同时包含 energy_level 与 agency_level 的记录。请先运行 AI 分析流程。',
+            recordCount: data.length,
+            aiEnhancedCount
+          }, true)
+        }
+      }
+
+      if (analysisType === 'causality_chain') {
+        const moodTag = params.moodTag || '焦虑'
+        const ok = hasSome(r => r._ai_meta && Array.isArray(r._ai_meta.mood_tags) && r._ai_meta.mood_tags.includes(moodTag))
+        if (!ok) {
+          return new ToolResult(this.name, {
+            error: '暂无可用的因果链路数据',
+            message: `未找到包含情绪标签“${moodTag}”的记录。请先运行 AI 分析流程，或更换情绪。`,
+            recordCount: data.length,
+            aiEnhancedCount
+          }, true)
+        }
+      }
       
       // 执行相应的分析
       switch (analysisType) {
@@ -118,6 +265,34 @@ export class InsightAnalystTool extends Tool {
         case 'activity_calendar':
           result = sqlService.analyzeActivityCalendar(data, params.filter_date_range || {})
           break
+
+        case 'life_composition':
+          result = sqlService.analyzeLifeComposition(data)
+          break
+
+        case 'resonance_analysis':
+          result = sqlService.analyzeResonanceAnalysis(data, {
+            dimension: params.dimension || 'location',
+            boosterThreshold: typeof params.boosterThreshold === 'number' ? params.boosterThreshold : 6,
+            drainerThreshold: typeof params.drainerThreshold === 'number' ? params.drainerThreshold : 4,
+            minOccurrences: typeof params.minOccurrences === 'number' ? params.minOccurrences : 2,
+            topN: typeof params.topN === 'number' ? params.topN : 5
+          })
+          break
+
+        case 'state_matrix':
+          result = sqlService.analyzeStateMatrix(data, {
+            energyMidpoint: params.energyMidpoint ?? null,
+            agencyMidpoint: params.agencyMidpoint ?? null
+          })
+          break
+
+        case 'causality_chain':
+          result = sqlService.analyzeCausalityChain(data, {
+            moodTag: params.moodTag || '焦虑',
+            limit: typeof params.limit === 'number' ? params.limit : 200
+          })
+          break
           
         default:
           return new ToolResult(this.name, {
@@ -130,13 +305,16 @@ export class InsightAnalystTool extends Tool {
               'temporal_stats',
               'wisdom_archive',
               'context_cloud',
-              'activity_calendar'
+              'activity_calendar',
+              'life_composition',
+              'resonance_analysis',
+              'state_matrix',
+              'causality_chain'
             ]
           }, true)
       }
       
       // 统计 AI 增强数据覆盖率
-      const aiEnhancedCount = data.filter(item => item._ai_meta).length
       
       return new ToolResult(this.name, {
         analysisType,

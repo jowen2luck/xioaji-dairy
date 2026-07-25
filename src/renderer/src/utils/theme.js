@@ -50,6 +50,9 @@ const themes = {
 // 当前主题
 const currentTheme = ref(themes.light)
 
+const SETTINGS_KEY = 'theme'
+const LS_KEY = 'app-theme'
+
 // 应用主题到文档根元素
 function applyTheme(theme) {
   const root = document.documentElement
@@ -81,13 +84,47 @@ function setTheme(themeName) {
   if (theme) {
     currentTheme.value = theme
     applyTheme(theme)
-    localStorage.setItem('app-theme', themeName)
+    const ipc = globalThis?.electron?.ipcRenderer
+    try {
+      if (ipc?.sendSync) {
+        ipc.sendSync('settings:set-sync', { key: SETTINGS_KEY, value: themeName })
+        return
+      }
+    } catch {}
+    try {
+      localStorage.setItem(LS_KEY, themeName)
+    } catch {}
   }
 }
 
 // 初始化主题
 function initTheme() {
-  const savedTheme = localStorage.getItem('app-theme')
+  const ipc = globalThis?.electron?.ipcRenderer
+
+  const readFromFile = () => {
+    try {
+      if (!ipc?.sendSync) return null
+      return ipc.sendSync('settings:get-sync', SETTINGS_KEY)
+    } catch {
+      return null
+    }
+  }
+
+  const tryMigrateFromLocalStorage = () => {
+    try {
+      const raw = localStorage.getItem(LS_KEY)
+      if (!raw) return null
+      if (ipc?.sendSync) {
+        ipc.sendSync('settings:set-sync', { key: SETTINGS_KEY, value: raw })
+        localStorage.removeItem(LS_KEY)
+      }
+      return raw
+    } catch {
+      return null
+    }
+  }
+
+  const savedTheme = readFromFile() ?? tryMigrateFromLocalStorage()
   const themeName = savedTheme && themes[savedTheme] ? savedTheme : 'light'
   setTheme(themeName)
 }

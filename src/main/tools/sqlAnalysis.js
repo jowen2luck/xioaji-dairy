@@ -66,6 +66,14 @@ export class SqlAnalysisTool extends Tool {
             timeUnit: { type: 'string', description: '如果是时间统计，指定单位: day/week/month/year' },
             metric: { type: 'string', enum: ['count', 'sum', 'avg'], description: '统计指标' },
             targetField: { type: 'string', description: 'sum/avg 的目标字段' },
+            filter: { 
+              type: 'object', 
+              description: '筛选条件 (WHERE)',
+              properties: {
+                field: { type: 'string' },
+                value: { type: 'string', description: '包含匹配 (LIKE %value%)' }
+              }
+            }
           },
         },
       },

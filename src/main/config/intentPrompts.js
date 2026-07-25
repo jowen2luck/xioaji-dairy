@@ -61,10 +61,22 @@ Output:
   "reasoning": "模糊回忆需优先使用 search_records 进行向量检索，calendar_resolver 辅助过滤时间。"
 }
 
+【示例 3：总结查询】
+User: "去年10月份总结"
+Output:
+{
+  "primary_intent": "query",
+  "standalone_query": "查询去年10月份的总结",
+  "temporal_context": { "raw": "去年10月份", "needs_dynamic_resolution": true },
+  "suggested_pipeline": ["calendar_resolver", "query_records"],
+  "reasoning": "总结优先读取已有总结记录，不足再考虑统计分析。"
+}
+
 【注意事项】
 1. 只输出 JSON，无其他废话。
 2. 不要自己计算日期，相对时间交给 'calendar_resolver'。
 3. 如果是 "你好"、"再见" 等闲聊，primary_intent 设为 "casual"，suggested_pipeline 为 []。
+4. 出现“总结/复盘/回顾”时优先建议 query_records 读取已有总结。
 `
 
 /**

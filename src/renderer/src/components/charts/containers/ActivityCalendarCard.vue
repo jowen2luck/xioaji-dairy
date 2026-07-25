@@ -31,9 +31,16 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { InformationCircleOutline as InfoIcon } from '@vicons/ionicons5'
 import CalendarHeatmap from '../base/CalendarHeatmap.vue'
+
+const props = defineProps({
+  refreshKey: {
+    type: Number,
+    default: 0
+  }
+})
 
 const loading = ref(false)
 const error = ref(null)
@@ -54,10 +61,10 @@ const fetchData = async () => {
   error.value = null
   
   try {
-    const response = await window.electron.ipcRenderer.invoke('tool-execute', 'sql_analysis', {
+    const response = await window.electron.ipcRenderer.invoke('tool-execute', 'insight_analyst', {
       analysisType: 'activity_calendar',
       params: {
-        dateRange: {
+        filter_date_range: {
           start: `${selectedYear.value}-01-01`,
           end: `${selectedYear.value}-12-31`
         }
@@ -83,6 +90,13 @@ const fetchData = async () => {
 onMounted(() => {
   fetchData()
 })
+
+watch(
+  () => props.refreshKey,
+  () => {
+    fetchData()
+  }
+)
 </script>
 
 <style scoped>

@@ -87,15 +87,22 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { NCard, NSpace, NButton, NIcon, NSpin, NAlert, NGrid, NGi, NEmpty, NSelect } from 'naive-ui'
 import { RefreshOutline, TrendingUpOutline, TrendingDownOutline } from '@vicons/ionicons5'
-import { resonanceConfig } from '../../../config/chartsConfig.js'
+
+const props = defineProps({
+  refreshKey: {
+    type: Number,
+    default: 0
+  }
+})
 
 const loading = ref(false)
 const error = ref(null)
-const impactData = ref([])
 const selectedDimension = ref('location')
+const boostersData = ref([])
+const drainersData = ref([])
 
 const dimensionOptions = [
   { label: '地点', value: 'location' },
@@ -103,65 +110,8 @@ const dimensionOptions = [
   { label: '物品', value: 'items' }
 ]
 
-// 赋能榜（平均能量 >= boosterThreshold 的，取前 topN）
-const boosters = computed(() => {
-  return impactData.value
-    .filter(item => item.avg >= resonanceConfig.boosterThreshold)
-    .sort((a, b) => b.avg - a.avg)
-    .slice(0, resonanceConfig.topN)
-})
-
-// 消耗榜（平均能量 <= drainerThreshold 的，取前 topN）
-const drainers = computed(() => {
-  return impactData.value
-    .filter(item => item.avg <= resonanceConfig.drainerThreshold)
-    .sort((a, b) => a.avg - b.avg)
-    .slice(0, resonanceConfig.topN)
-})
-
-// 计算影响因子（使用绝对能量值而非相对差异）
-function calculateImpact(records, dimensionKey) {
-  const metricKey = 'energy_level'
-  
-  // 过滤出有效记录
-  const validRecords = records.filter(r => 
-    r._ai_meta && 
-    typeof r._ai_meta[metricKey] === 'number' &&
-    r._ai_meta[dimensionKey]
-  )
-
-  if (validRecords.length === 0) {
-    return []
-  }
-
-  // 按维度分组
-  const groups = {}
-  validRecords.forEach(r => {
-    const value = r._ai_meta[dimensionKey]
-    const keys = Array.isArray(value) ? value : [value]
-    
-    keys.forEach(k => {
-      if (!k || k.trim() === '') return
-      
-      if (!groups[k]) {
-        groups[k] = { sum: 0, count: 0 }
-      }
-      groups[k].sum += r._ai_meta[metricKey]
-      groups[k].count += 1
-    })
-  })
-
-  // 计算平均能量值（不再使用相对差异）
-  return Object.entries(groups)
-    .filter(([k, v]) => v.count >= resonanceConfig.minOccurrences) // 至少出现指定次数
-    .map(([k, v]) => ({
-      name: k,
-      avg: v.sum / v.count,
-      impact: v.sum / v.count - 5, // 以 5 为中线的偏移（仅用于显示）
-      count: v.count
-    }))
-    .sort((a, b) => b.avg - a.avg)
-}
+const boosters = computed(() => boostersData.value || [])
+const drainers = computed(() => drainersData.value || [])
 
 // 分析数据
 async function analyze() {
@@ -169,26 +119,23 @@ async function analyze() {
   error.value = null
 
   try {
-    // 获取全量记录
     const result = await window.electron.ipcRenderer.invoke(
       'tool-execute',
-      'query_records',
-      { limit: 1000 }
+      'insight_analyst',
+      {
+        analysisType: 'resonance_analysis',
+        params: { dimension: selectedDimension.value }
+      }
     )
 
     if (result.isError || !result.data) {
       throw new Error(result.data?.error || '数据获取失败')
     }
 
-    const toolData = result.data.data || result.data
-    const records = toolData.records || []
-
-    if (records.length === 0) {
-      throw new Error('暂无可分析的数据')
-    }
-
-    // 计算影响因子
-    impactData.value = calculateImpact(records, selectedDimension.value)
+    const toolPayload = result.data?.data || null
+    const analysis = toolPayload?.data || null
+    boostersData.value = Array.isArray(analysis?.boosters) ? analysis.boosters : []
+    drainersData.value = Array.isArray(analysis?.drainers) ? analysis.drainers : []
 
   } catch (err) {
     console.error('[ResonanceAnalysisCard] 分析失败:', err)
@@ -201,6 +148,13 @@ async function analyze() {
 onMounted(() => {
   analyze()
 })
+
+watch(
+  () => props.refreshKey,
+  () => {
+    analyze()
+  }
+)
 </script>
 
 <style scoped>

@@ -55,6 +55,27 @@
       />
     </div>
     <div class="filter-item">
+      <n-select
+        v-model:value="localValue.contentType"
+        placeholder="内容类型"
+        :options="contentTypeOptions"
+        clearable
+        size="large"
+        @update:value="emitUpdate"
+      />
+    </div>
+    <div class="filter-item" style="min-width: 200px; padding: 0 8px;">
+      <div style="margin-bottom: 4px; font-size: 12px; color: var(--n-text-color-3);">能量值范围</div>
+      <n-slider
+        v-model:value="localValue.energyRange"
+        range
+        :min="0"
+        :max="10"
+        :step="1"
+        @update:value="emitUpdate"
+      />
+    </div>
+    <div class="filter-item">
       <n-button size="large" ghost @click="$emit('reset')">重置筛选</n-button>
     </div>
   </div>
@@ -67,7 +88,13 @@ import { FolderOpenOutline, SearchOutline, SparklesOutline } from '@vicons/ionic
 const props = defineProps({
   value: {
     type: Object,
-    default: () => ({ query: '', project: null, dateRange: null })
+    default: () => ({ 
+      query: '', 
+      project: null, 
+      dateRange: null,
+      contentType: null,
+      energyRange: [0, 10]
+    })
   },
   projectOptions: {
     type: Array,
@@ -84,13 +111,24 @@ const emit = defineEmits(['update:value', 'import', 'reset', 'etl-enhance'])
 const localValue = reactive({
   query: props.value.query,
   project: props.value.project,
-  dateRange: props.value.dateRange
+  dateRange: props.value.dateRange,
+  contentType: props.value.contentType,
+  energyRange: props.value.energyRange || [0, 10]
 })
+
+const contentTypeOptions = [
+  { label: '📝 日志', value: 'Log' },
+  { label: '🔄 复盘', value: 'Review' },
+  { label: '💭 梦境', value: 'Dream' },
+  { label: '📊 总结', value: 'Summary' }
+]
 
 watch(() => props.value, (v) => {
   localValue.query = v.query
   localValue.project = v.project
   localValue.dateRange = v.dateRange
+  localValue.contentType = v.contentType
+  localValue.energyRange = v.energyRange || [0, 10]
 }, { deep: true })
 
 function emitUpdate() {

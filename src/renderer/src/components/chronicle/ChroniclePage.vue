@@ -60,22 +60,28 @@
             </div>
 
             <section class="chapter-content">
-              <div v-if="monthlyRecords.length === 0" class="empty-month">
+              <div v-if="monthlyRecordsWithSummaries.length === 0" class="empty-month">
                 本月无记录
               </div>
               <div v-else class="entries-flow">
-                <div 
-                  v-for="(record, index) in monthlyRecords" 
-                  :key="record._id"
-                  :id="`entry-${record.time}`" 
-                  class="entry-wrapper"
-                >
-                  <DiaryPageLayout
-                    :record="record"
-                    :page-number="index + 1"
-                    :total-pages="monthlyRecords.length"
-                  />
-                </div>
+                <template v-for="(item, index) in monthlyRecordsWithSummaries" :key="item._id">
+                  <!-- 总结卡片 -->
+                  <div v-if="item._type === 'summary'" class="entry-wrapper summary-wrapper">
+                    <SummaryCard :summary="item" />
+                  </div>
+                  <!-- 普通日记 -->
+                  <div 
+                    v-else
+                    :id="`entry-${item.time}`" 
+                    class="entry-wrapper"
+                  >
+                    <DiaryPageLayout
+                      :record="item"
+                      :page-number="getRecordPageNumber(item, index)"
+                      :total-pages="monthlyRecords.length"
+                    />
+                  </div>
+                </template>
               </div>
             </section>
 
@@ -90,10 +96,12 @@
 import { ref, computed, onMounted, nextTick } from 'vue'
 import MonthlyDashboard from './MonthlyDashboard.vue'
 import DiaryPageLayout from './DiaryPageLayout.vue'
+import SummaryCard from './SummaryCard.vue'
 
 // State
 const loading = ref(false)
 const allData = ref([])
+const summaries = ref([])
 const currentYear = ref(new Date().getFullYear())
 const currentMonth = ref(new Date().getMonth() + 1)
 const scrollContainer = ref(null)
@@ -117,6 +125,80 @@ const monthlyRecords = computed(() => {
     })
     .sort((a, b) => new Date(a.time) - new Date(b.time))
 })
+
+// 将总结插入到记录流中
+const monthlyRecordsWithSummaries = computed(() => {
+  const records = [...monthlyRecords.value]
+  
+  // 获取该月的周总结
+  const weeklySummaries = summaries.value.filter(s => 
+    s._summary_type === 'weekly' &&
+    s._summary_period?.year === currentYear.value &&
+    s._summary_period?.month === currentMonth.value
+  ).sort((a, b) => a._summary_period.week - b._summary_period.week)
+  
+  // 获取该月的月总结
+  const monthlySummary = summaries.value.find(s =>
+    s._summary_type === 'monthly' &&
+    s._summary_period?.year === currentYear.value &&
+    s._summary_period?.month === currentMonth.value
+  )
+  
+  // 构建最终列表：记录 + 周总结（按周插入）+ 月总结（末尾）
+  const result = []
+  let currentWeek = 0
+  
+  for (const record of records) {
+    const recordDate = new Date(record.time)
+    const recordWeek = getWeekNumber(recordDate)
+    
+    // 如果进入新的一周，先插入上一周的总结
+    if (recordWeek > currentWeek && currentWeek > 0) {
+      const weekSummary = weeklySummaries.find(s => s._summary_period.week === currentWeek)
+      if (weekSummary) {
+        result.push(weekSummary)
+      }
+    }
+    
+    currentWeek = recordWeek
+    result.push(record)
+  }
+  
+  // 插入最后一周的总结
+  if (currentWeek > 0) {
+    const lastWeekSummary = weeklySummaries.find(s => s._summary_period.week === currentWeek)
+    if (lastWeekSummary) {
+      result.push(lastWeekSummary)
+    }
+  }
+  
+  // 最后插入月总结
+  if (monthlySummary) {
+    result.push(monthlySummary)
+  }
+  
+  return result
+})
+
+// 获取记录所属的周数 (ISO 周)
+const getWeekNumber = (date) => {
+  const d = new Date(date)
+  d.setHours(0, 0, 0, 0)
+  d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7)
+  const week1 = new Date(d.getFullYear(), 0, 4)
+  return 1 + Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7)
+}
+
+// 计算普通记录的页码（排除总结）
+const getRecordPageNumber = (record, index) => {
+  let pageNum = 0
+  for (let i = 0; i <= index; i++) {
+    if (monthlyRecordsWithSummaries.value[i]._type !== 'summary') {
+      pageNum++
+    }
+  }
+  return pageNum
+}
 
 const monthName = computed(() => {
   const months = [
@@ -171,9 +253,20 @@ const loadData = async () => {
   
   try {
     loading.value = true
-    const data = await window.electron.ipcRenderer.invoke('etl:get-enriched-data')
+    
+    // 并行加载日记数据和总结数据
+    const [data, summaryData] = await Promise.all([
+      window.electron.ipcRenderer.invoke('etl:get-enriched-data'),
+      window.electron.ipcRenderer.invoke('summary:get-all')
+    ])
+    
     if (data && !data.error) {
       allData.value = data
+    }
+    
+    if (summaryData && !summaryData.error && Array.isArray(summaryData)) {
+      summaries.value = summaryData
+      console.log(`[ChroniclePage] Loaded ${summaryData.length} summaries`)
     }
   } catch (error) {
     console.error('[ChroniclePage] Failed to load data:', error)

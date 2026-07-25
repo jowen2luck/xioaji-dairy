@@ -172,6 +172,17 @@ export class CalendarResolverTool extends Tool {
       }
     }
 
+    const lastYearMonthMatch = q.match(/^(去年|上年)(\d{1,2})月(份)?$/);
+    if (lastYearMonthMatch) {
+      const month = parseInt(lastYearMonthMatch[2], 10);
+      if (month >= 1 && month <= 12) {
+        const targetYear = base.subtract(1, 'year').year();
+        const monthStr = String(month).padStart(2, '0');
+        const start = dayjs.tz(`${targetYear}-${monthStr}-01`, DEFAULT_TIMEZONE);
+        return this.buildRange(start.startOf('month'), start.endOf('month'), `${targetYear}年${month}月`);
+      }
+    }
+
     // ================= 1. 优先尝试标准格式解析 (Day.js) =================
     // 这步非常重要，它负责解析 "2025年9月1日" 或 "2025-09-01" 这种原子时间
     const standardRes = this.parseStandardFormats(q, base);

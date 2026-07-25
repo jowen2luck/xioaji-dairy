@@ -8,13 +8,18 @@
  * - etl:get-enriched-data - 获取增强后的数据
  * - etl:get-metadata - 获取单条记录的 AI 元数据
  * - etl:force-refresh - 强制刷新所有记录
+ * - etl:reset-instance - 重置 ETL 引擎实例（设置变更时调用）
+ * - summary:get-all - 获取所有总结
+ * - summary:auto-generate - 自动生成总结
  * 
  * 事件通信：
  * - etl:event - 统一事件通道，包含：start, progress, record-updated, error, complete
+ * - summary:event - 总结事件通道
  */
 
 import { ipcMain, BrowserWindow } from 'electron'
 import { LLMEnricher } from './llmEnricher.js'
+import { getSummaryService } from './summaryService.js'
 import { loadAndEnrichData } from '../data/index.js'
 
 let enricherInstance = null
@@ -44,6 +49,10 @@ function getEnricher(config) {
   
   if (!enricherInstance) {
     enricherInstance = new LLMEnricher(config, eventCallback)
+  } else {
+    // 关键：动态更新现有单例的配置
+    enricherInstance.config = config
+    enricherInstance.eventCallback = eventCallback
   }
   
   return enricherInstance
@@ -174,6 +183,62 @@ export function registerETLHandlers() {
       }
     }
   })
+
+  // 重置 ETL 引擎实例（设置变更时调用，确保下次使用新配置）
+  ipcMain.handle('etl:reset-instance', async () => {
+    console.log('[ETL IPC] Resetting enricher instance due to settings change')
+    enricherInstance = null
+    return { success: true }
+  })
+
+  // ==================== Summary IPC Handlers ====================
+
+  // 获取所有总结
+  ipcMain.handle('summary:get-all', async () => {
+    try {
+      const summaryService = getSummaryService()
+      return summaryService.getSummaries()
+    } catch (error) {
+      console.error('[ETL IPC] Error getting summaries:', error)
+      return { error: error.message }
+    }
+  })
+
+  // 自动生成总结
+  ipcMain.handle('summary:auto-generate', async (event, options = {}) => {
+    try {
+      console.log('[ETL IPC] Starting auto-generate summaries with options:', options)
+      const summaryService = getSummaryService()
+
+      // 事件回调：通知前端总结生成进度
+      const eventCallback = (evt) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('summary:event', evt)
+        }
+      }
+
+      const result = await summaryService.autoGenerateSummaries(options, eventCallback)
+      return result
+    } catch (error) {
+      console.error('[ETL IPC] Error auto-generating summaries:', error)
+      return { error: error.message }
+    }
+  })
   
-  console.log('[ETL] IPC handlers registered')
+  // 取消生成总结
+  ipcMain.handle('summary:abort-generate', async () => {
+    try {
+      console.log('[ETL IPC] Aborting summary generation...')
+      const summaryService = getSummaryService()
+      if (typeof summaryService.abort === 'function') {
+        summaryService.abort()
+      }
+      return { success: true }
+    } catch (error) {
+      console.error('[ETL IPC] Error aborting sumaries:', error)
+      return { error: error.message }
+    }
+  })
+
+  console.log('[ETL] IPC handlers registered (including summary handlers)')
 }

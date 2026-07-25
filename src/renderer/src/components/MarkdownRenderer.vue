@@ -25,7 +25,9 @@ const renderedHtml = computed(() => {
   if (!props.content) return ''
   try {
     const raw = marked.parse(props.content)
-    return DOMPurify.sanitize(raw)
+    return DOMPurify.sanitize(raw, {
+      ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|file):|data:image\/(?:png|jpe?g|gif|webp|svg\+xml);base64,|\/|\.\/|\.\.\/|#)/i,
+    })
   } catch (error) {
     return `<p>解析出错</p>`
   }
@@ -42,11 +44,13 @@ const renderedHtml = computed(() => {
   --md-line-height: 1.8;      /* 1.8 倍行高，让文字更透气 */
   
   /* 颜色 (适配深色模式，你可以根据你的项目变量替换) */
-  --md-text-primary: #e2e8f0; /* 主文字色 (截图看你是深色底) */
-  --md-text-secondary: #94a3b8; /* 次要文字色 */
-  --md-accent: #818cf8;       /* 强调色 (链接、符号) */
-  --md-bg-block: rgba(255, 255, 255, 0.05); /* 引用块/代码块背景 */
-  --md-border: rgba(255, 255, 255, 0.1);
+  --md-text-primary: var(--color-text, #1f2937);
+  --md-text-secondary: var(--color-text-secondary, #4b5563);
+  --md-accent: var(--color-button-primary, #3b82f6);
+  --md-bg-block: var(--color-background-mute, #f3f4f6);
+  --md-border: var(--color-border, #e5e7eb);
+  --md-code-bg: var(--color-background-mute, #f3f4f6);
+  --md-code-text: var(--color-text, #1f2937);
 }
 
 /* 容器基础样式 */
@@ -88,7 +92,7 @@ const renderedHtml = computed(() => {
   margin-bottom: 0.8em;
   font-weight: 600;
   line-height: 1.3;
-  color: #fff; /* 标题更亮 */
+  color: var(--md-text-primary);
 }
 
 .markdown-body :deep(h1) { font-size: 1.75em; border-bottom: 1px solid var(--md-border); padding-bottom: 0.3em; }
@@ -140,7 +144,7 @@ const renderedHtml = computed(() => {
    ============================================ */
 .markdown-body :deep(strong) {
   font-weight: 700;
-  color: #fff; /* 加粗文字用纯白，在深色模式下更醒目 */
+  color: var(--md-text-primary);
 }
 
 .markdown-body :deep(a) {
@@ -181,7 +185,7 @@ const renderedHtml = computed(() => {
   font-size: 0.9em;
   padding: 0.2em 0.4em;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.1);
-  color: #e2e8f0;
+  background: var(--md-code-bg);
+  color: var(--md-code-text);
 }
 </style>

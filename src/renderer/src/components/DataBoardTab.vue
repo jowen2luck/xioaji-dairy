@@ -15,30 +15,45 @@
           />
           
           <!-- ETL 进度条区域 -->
-          <div class="etl-progress-section" v-if="etlProcessing || etlStats.processed > 0">
+          <div class="etl-progress-section" v-if="etlProcessing || summaryProcessing || etlStats.processed > 0">
             <n-divider style="margin: 16px 0" />
             <n-space vertical size="medium">
-              <n-space align="center" justify="space-between">
-                <n-text depth="3">
-                  已处理 {{ etlStats.processed }} / {{ etlStats.total }} 条
-                </n-text>
-                <n-text depth="3" v-if="etlStats.cached > 0">
-                  已缓存 {{ etlStats.cached }} 条
-                </n-text>
-                <n-text depth="3" v-if="etlStats.failed > 0" type="error">
-                  失败 {{ etlStats.failed }} 条
-                </n-text>
-              </n-space>
+              <!-- ETL 进度 -->
+              <template v-if="etlStats.total > 0">
+                <n-space align="center" justify="space-between">
+                  <n-text depth="3">
+                    AI 增强: 已处理 {{ etlStats.processed }} / {{ etlStats.total }} 条
+                  </n-text>
+                  <n-text depth="3" v-if="etlStats.cached > 0">
+                    已缓存 {{ etlStats.cached }} 条
+                  </n-text>
+                  <n-text depth="3" v-if="etlStats.failed > 0" type="error">
+                    失败 {{ etlStats.failed }} 条
+                  </n-text>
+                </n-space>
+                
+                <n-progress
+                  type="line"
+                  :percentage="etlProgressPercentage"
+                  :status="etlProgressStatus"
+                  :show-indicator="false"
+                />
+              </template>
               
-              <n-progress
-                type="line"
-                :percentage="etlProgressPercentage"
-                :status="etlProgressStatus"
-                :show-indicator="false"
-              />
-              <n-text style="text-align: center; display: block;">
-                {{ etlProgressPercentage }}%
-              </n-text>
+              <!-- 总结生成进度 -->
+              <template v-if="summaryProcessing">
+                <n-space align="center">
+                  <n-spin size="small" />
+                  <n-text depth="3">{{ summaryMessage }}</n-text>
+                </n-space>
+              </template>
+              
+              <!-- 总结统计 -->
+              <template v-if="summaryStats.weeklyGenerated > 0 || summaryStats.monthlyGenerated > 0">
+                <n-text depth="3" type="success">
+                  总结生成: 周总结 {{ summaryStats.weeklyGenerated }} 篇，月总结 {{ summaryStats.monthlyGenerated }} 篇
+                </n-text>
+              </template>
             </n-space>
           </div>
         </n-card>
@@ -59,15 +74,21 @@
           <n-spin :show="loading">
             <n-empty v-if="filteredData.length === 0" description="没有找到匹配的记录" />
             <div v-else class="records-list">
-              <div v-for="(item, index) in paginatedData" :key="index" class="record-item">
-                <!-- 动态选择渲染组件：有 AI 数据用增强卡片，否则用普通卡片 -->
+              <div v-for="(item, index) in paginatedData" :key="item._id || index" class="record-item">
+                <!-- 总结卡片 -->
+                <SummaryCard
+                  v-if="item._type === 'summary'"
+                  :summary="item"
+                />
+                <!-- 有 AI 数据用增强卡片 -->
                 <EnhancedRecordCard
-                  v-if="item._ai_meta"
+                  v-else-if="item._ai_meta"
                   :record="item"
                   @tag-click="handleTagClick"
                   @request-analysis="handleRequestAnalysis"
                   @refresh="refreshDataSilently"
                 />
+                <!-- 普通卡片 -->
                 <RecordCard
                   v-else
                   :record="item"
@@ -137,10 +158,12 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, h } from 'vue'
+import { useDialog } from 'naive-ui'
 import FilterBar from './FilterBar.vue'
 import RecordCard from './RecordCard.vue'
 import EnhancedRecordCard from './EnhancedRecordCard.vue'
+import SummaryCard from './chronicle/SummaryCard.vue'
 import FlashbackCard from './FlashbackCard.vue'
 import SerendipityCard from './SerendipityCard.vue'
 import QuickStatsCard from './QuickStatsCard.vue'
@@ -159,8 +182,11 @@ const emit = defineEmits(['data-updated', 'message'])
 
 // 状态管理
 const allData = ref(props.initialData)
+const summaries = ref([]) // 总结数据
 const searchQuery = ref('')
 const projectFilter = ref(null)
+const contentTypeFilter = ref(null) // 新增内容类型筛选
+const energyRangeFilter = ref([0, 10]) // 新增能量值筛选
 const dateRange = ref(null)
 const startDate = ref('')
 const endDate = ref('')
@@ -177,6 +203,17 @@ const etlStats = ref({
   cached: 0,
   failed: 0
 })
+
+// 总结生成状态
+const summaryProcessing = ref(false)
+const summaryMessage = ref('')
+const summaryStats = ref({
+  weeklyGenerated: 0,
+  monthlyGenerated: 0,
+  errors: []
+})
+
+const dialog = useDialog()
 
 // 计算属性
 const projects = computed(() => {
@@ -197,29 +234,99 @@ const projectOptions = computed(() => {
 })
 
 const filteredData = computed(() => {
-  let result = allData.value
+  // 过滤普通记录
+  let records = allData.value
 
+  // 1. 搜索
   if (searchQuery.value) {
     const query = searchQuery.value.toLowerCase()
-    result = result.filter(item => {
+    records = records.filter(item => {
       return (item.ganshou && item.ganshou.toLowerCase().includes(query)) ||
              (item.shanggexiangmu && item.shanggexiangmu.toLowerCase().includes(query))
     })
   }
 
+  // 2. 项目筛选
   if (projectFilter.value) {
-    result = result.filter(item => item.shanggexiangmu === projectFilter.value)
+    records = records.filter(item => item.shanggexiangmu === projectFilter.value)
   }
 
+  // 3. 日期筛选
   if (startDate.value) {
-    result = result.filter(item => item.time >= startDate.value)
+    records = records.filter(item => item.time >= startDate.value)
   }
 
   if (endDate.value) {
-    result = result.filter(item => item.time <= endDate.value)
+    records = records.filter(item => item.time <= endDate.value)
   }
 
-  return result
+  // 4. 内容类型筛选 (如果选了 Summary, 这里 records 会被清空，在下面合并时只剩 summary)
+  if (contentTypeFilter.value) {
+    if (contentTypeFilter.value === 'Summary') {
+      records = [] // 只看总结
+    } else {
+      // 筛选特定类型的记录
+      const targetType = contentTypeFilter.value
+      records = records.filter(item => {
+        // 尝试匹配 _ai_meta.content_type (可能是英文或中文)
+        const type = item._ai_meta?.content_type
+        if (!type) return false
+        
+        // 简单映射匹配
+        if (targetType === 'Log') return type === 'Log' || type === '日志'
+        if (targetType === 'Review') return type === 'Review' || type === '复盘'
+        if (targetType === 'Dream') return type === 'Dream' || type === '梦境'
+        return type === targetType
+      })
+    }
+  }
+
+  // 5. 能量值筛选
+  // 仅对有能量值的记录生效，如果没有能量值且开启了筛选，通常默认不显示或根据需求。
+  // 这里逻辑：如果有 energy_level，必须在范围内。如果没有且不是 Summary (Summary 也有 stats)，则过滤掉?
+  // 用户说 "筛选对应的能量范围的记录"，通常 imply 只有有能量的记录才显示。
+  const [minEnergy, maxEnergy] = energyRangeFilter.value || [0, 10]
+  if (minEnergy > 0 || maxEnergy < 10) {
+    records = records.filter(item => {
+      const level = item._ai_meta?.energy_level
+      return typeof level === 'number' && level >= minEnergy && level <= maxEnergy
+    })
+  }
+
+  // 过滤总结
+  let filteredSummaries = summaries.value
+  
+  // 总结也受部分筛选影响 (如日期、搜索、类型)
+  // 日期筛选
+  if (startDate.value || endDate.value) {
+    filteredSummaries = filteredSummaries.filter(s => {
+      const summaryDate = s.time.split('T')[0]
+      if (startDate.value && summaryDate < startDate.value) return false
+      if (endDate.value && summaryDate > endDate.value) return false
+      return true
+    })
+  }
+  
+  // 类型筛选
+  if (contentTypeFilter.value && contentTypeFilter.value !== 'Summary') {
+    // 如果选了 Log/Review/Dream，则不显示 Summary
+    filteredSummaries = []
+  }
+
+  // 能量筛选 (可选：总结也有 avgEnergyLevel，是否应用？用户说筛选记录，暂时只对记录生效，或者对总结也生效?)
+  // 既然用户意图是回顾，总结也应该受能量筛选影响比较合理 (看那周平均能量)
+  if (minEnergy > 0 || maxEnergy < 10) {
+    filteredSummaries = filteredSummaries.filter(s => {
+      const level = s.stats?.avgEnergyLevel
+      return typeof level === 'number' && level >= minEnergy && level <= maxEnergy
+    })
+  }
+
+  // 合并记录和总结，按时间倒序排列
+  const combined = [...records, ...filteredSummaries]
+  combined.sort((a, b) => new Date(b.time) - new Date(a.time))
+
+  return combined
 })
 
 const pageCount = computed(() => {
@@ -303,6 +410,8 @@ const onFilterUpdate = (v) => {
   searchQuery.value = v.query
   projectFilter.value = v.project
   dateRange.value = v.dateRange
+  contentTypeFilter.value = v.contentType
+  energyRangeFilter.value = v.energyRange
   handleDateRangeChange(v.dateRange)
 }
 
@@ -312,6 +421,53 @@ const showMessage = (text, type = 'info') => {
   setTimeout(() => {
     message.value = null
   }, 5000)
+}
+
+const formatMissingMessage = (missing, incomplete) => {
+  const lines = []
+
+  if (missing?.weekly?.length) {
+    lines.push('周总结发现缺失天数：')
+    missing.weekly.forEach(item => {
+      const days = item.missingDays?.length ? `（${item.missingDays.join(', ')}）` : ''
+      lines.push(`• ${item.year} 年第 ${item.week} 周 缺失 ${item.missingDays.length} 天${days}`)
+    })
+  }
+
+  if (missing?.monthly?.length) {
+    lines.push('月总结发现缺失数据：')
+    missing.monthly.forEach(item => {
+      const daysText = item.missingDays?.length ? `缺失 ${item.missingDays.length} 天` : ''
+      const weeksText = item.missingWeeks?.length
+        ? `缺失周：${item.missingWeeks.map(key => {
+            const [y, w] = key.split('-W')
+            return `${y} 年第 ${Number(w)} 周`
+          }).join(', ')}`
+        : ''
+      const parts = [daysText, weeksText].filter(Boolean).join('，')
+      lines.push(`• ${item.year} 年 ${item.month} 月 ${parts}`)
+    })
+  }
+
+  if (missing?.yearly?.length) {
+    lines.push('年总结发现缺失月份：')
+    missing.yearly.forEach(item => {
+      const months = item.missingMonths.map(m => `${m.month} 月`).join(', ')
+      lines.push(`• ${item.year} 年 缺失 ${months}`)
+    })
+  }
+
+  if (incomplete?.weekly?.length || incomplete?.monthly?.length) {
+    lines.push('以下周期尚未结束，已跳过：')
+    incomplete.weekly?.forEach(item => {
+      lines.push(`• ${item.year} 年第 ${item.week} 周`)
+    })
+    incomplete.monthly?.forEach(item => {
+      lines.push(`• ${item.year} 年 ${item.month} 月`)
+    })
+  }
+
+  return lines.join('\n')
 }
 
 const importData = async () => {
@@ -355,6 +511,8 @@ const resetFilters = () => {
   dateRange.value = null
   startDate.value = ''
   endDate.value = ''
+  contentTypeFilter.value = null
+  energyRangeFilter.value = [0, 10]
 }
 
 const startETLEnhancement = async () => {
@@ -427,20 +585,23 @@ const handleETLEvent = (data) => {
       break
       
     case 'complete':
-      console.log('[DataBoardTab] ETL Complete, starting data refresh...')
+      console.log('[DataBoardTab] ETL Complete, starting data refresh and summary generation...')
       etlStats.value = {
         total: data.data.stats.total,
         processed: data.data.stats.processed,
         cached: data.data.stats.cached,
         failed: data.data.stats.failed
       }
-      refreshData().then(() => {
-        console.log('[DataBoardTab] Data refreshed, ending loading state...')
+      refreshData().then(async () => {
+        console.log('[DataBoardTab] Data refreshed, starting summary generation...')
         etlProcessing.value = false
         showMessage(
-          `智能增强完成！总计 ${data.data.stats.total} 条，处理 ${data.data.stats.processed} 条，缓存 ${data.data.stats.cached} 条，失败 ${data.data.stats.failed} 条`, 
+          `智能增强完成！总计 ${data.data.stats.total} 条，处理 ${data.data.stats.processed} 条，缓存 ${data.data.stats.cached} 条`, 
           data.data.stats.failed > 0 ? 'warning' : 'success'
         )
+        
+        // ETL 完成后自动生成总结
+        await startSummaryGeneration()
       }).catch(err => {
         console.error('[DataBoardTab] Error refreshing data:', err)
         etlProcessing.value = false
@@ -452,6 +613,93 @@ const handleETLEvent = (data) => {
       console.error('[DataBoardTab] ETL Error:', data.data)
       etlProcessing.value = false
       showMessage(`智能增强出错: ${data.data.error || '未知错误'}`, 'error')
+      break
+  }
+}
+
+// 总结生成
+const startSummaryGeneration = async (allowMissingData = false) => {
+  try {
+    console.log('[DataBoardTab] Starting summary generation...')
+    summaryProcessing.value = true
+    summaryMessage.value = '正在检查需要生成的总结...'
+    
+    const result = await window.electron.ipcRenderer.invoke('summary:auto-generate', {
+      generateWeekly: true,
+      generateMonthly: true,
+      allowMissingData
+    })
+    
+    if (result?.requiresConfirm && !allowMissingData) {
+      summaryProcessing.value = false
+      summaryMessage.value = ''
+      dialog.warning({
+        title: '总结数据不完整',
+        content: () => h('div', { style: 'white-space: pre-line;' }, formatMissingMessage(result.missing, result.incomplete)),
+        positiveText: '继续总结',
+        negativeText: '取消总结',
+        onPositiveClick: () => {
+          return startSummaryGeneration(true)
+        },
+        onNegativeClick: () => showMessage('已取消总结，请补充数据后再试', 'info')
+      })
+      return
+    }
+
+    if (result.error) {
+      console.error('[DataBoardTab] Summary generation error:', result.error)
+      showMessage(`总结生成失败: ${result.error}`, 'error')
+    } else {
+      summaryStats.value = {
+        weeklyGenerated: result.weeklyGenerated || 0,
+        monthlyGenerated: result.monthlyGenerated || 0,
+        errors: result.errors || []
+      }
+      
+      const totalGenerated = (result.weeklyGenerated || 0) + (result.monthlyGenerated || 0)
+      if (totalGenerated > 0) {
+        showMessage(`总结生成完成！周总结 ${result.weeklyGenerated} 篇，月总结 ${result.monthlyGenerated} 篇`, 'success')
+        
+        // 刷新总结数据以显示新生成的总结
+        const summaryData = await window.electron.ipcRenderer.invoke('summary:get-all')
+        if (summaryData && !summaryData.error && Array.isArray(summaryData)) {
+          summaries.value = summaryData
+          console.log('[DataBoardTab] Refreshed summaries:', summaryData.length, 'items')
+        }
+      } else {
+        showMessage('所有总结均已是最新，无需重新生成', 'info')
+      }
+
+      if (result.incompleteSkipped > 0) {
+        showMessage('部分周期尚未结束，已跳过生成', 'warning')
+      }
+    }
+  } catch (error) {
+    console.error('[DataBoardTab] Summary generation failed:', error)
+    showMessage(`总结生成失败: ${error.message}`, 'error')
+  } finally {
+    summaryProcessing.value = false
+    summaryMessage.value = ''
+  }
+}
+
+// 总结事件处理
+const handleSummaryEvent = (data) => {
+  if (!data || !data.type) return
+  
+  console.log('[DataBoardTab] Summary Event:', data.type, data.data)
+  
+  switch (data.type) {
+    case 'summary-progress':
+      summaryMessage.value = data.data.message || '正在生成总结...'
+      break
+      
+    case 'summary-complete':
+      summaryStats.value = {
+        weeklyGenerated: data.data.weeklyGenerated || 0,
+        monthlyGenerated: data.data.monthlyGenerated || 0,
+        errors: data.data.errors || []
+      }
       break
   }
 }
@@ -508,7 +756,13 @@ onMounted(async () => {
   if (window.electron && window.electron.ipcRenderer) {
     try {
       loading.value = true
-      const data = await window.electron.ipcRenderer.invoke('etl:get-enriched-data')
+      
+      // 并行加载记录和总结
+      const [data, summaryData] = await Promise.all([
+        window.electron.ipcRenderer.invoke('etl:get-enriched-data'),
+        window.electron.ipcRenderer.invoke('summary:get-all')
+      ])
+      
       if (data && !data.error) {
         allData.value = data
         emit('data-updated', data)
@@ -522,6 +776,12 @@ onMounted(async () => {
           showMessage(`已加载 ${data.length} 条记录，尚未进行 AI 增强`, 'info')
         }
       }
+      
+      // 加载总结数据
+      if (summaryData && !summaryData.error && Array.isArray(summaryData)) {
+        summaries.value = summaryData
+        console.log('[DataBoardTab] Auto-loaded summaries:', summaryData.length, 'items')
+      }
     } catch (error) {
       console.error('[DataBoardTab] Error auto-loading data:', error)
       showMessage('自动加载数据失败', 'error')
@@ -531,12 +791,16 @@ onMounted(async () => {
     
     // 注册 ETL 事件监听
     window.electron.ipcRenderer.on('etl:event', handleETLEvent)
+    
+    // 注册总结事件监听
+    window.electron.ipcRenderer.on('summary:event', handleSummaryEvent)
   }
 })
 
 onUnmounted(() => {
   if (window.electron && window.electron.ipcRenderer) {
     window.electron.ipcRenderer.removeAllListeners('etl:event')
+    window.electron.ipcRenderer.removeAllListeners('summary:event')
   }
 })
 </script>

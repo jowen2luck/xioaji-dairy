@@ -153,8 +153,13 @@ function analyzeIntentByKeywords(query) {
     complexity = 'high'
     suggested_pipeline = ['query_records', 'insight_analyst']
   }
+  else if (['总结', '复盘', '回顾'].some(kw => queryLower.includes(kw))) {
+    primary_intent = 'query'
+    complexity = 'medium'
+    suggested_pipeline = ['calendar_resolver', 'query_records']
+  }
   // 统计分析
-  else if (['统计', '分析', '总结', '对比', '趋势', '分布'].some(kw => queryLower.includes(kw))) {
+  else if (['统计', '分析', '对比', '趋势', '分布'].some(kw => queryLower.includes(kw))) {
     primary_intent = 'statistical'
     complexity = 'medium'
     suggested_pipeline = ['sql_analysis']

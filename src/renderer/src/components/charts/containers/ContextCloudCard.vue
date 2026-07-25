@@ -34,9 +34,16 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { InformationCircleOutline as InfoIcon } from '@vicons/ionicons5'
 import WordCloudChart from '../base/WordCloudChart.vue'
+
+const props = defineProps({
+  refreshKey: {
+    type: Number,
+    default: 0
+  }
+})
 
 const loading = ref(false)
 const error = ref(null)
@@ -50,7 +57,7 @@ const fetchData = async () => {
   error.value = null
   
   try {
-    const response = await window.electron.ipcRenderer.invoke('tool-execute', 'sql_analysis', {
+    const response = await window.electron.ipcRenderer.invoke('tool-execute', 'insight_analyst', {
       analysisType: 'context_cloud',
       params: { limit: 30 }
     })
@@ -77,6 +84,13 @@ const fetchData = async () => {
 onMounted(() => {
   fetchData()
 })
+
+watch(
+  () => props.refreshKey,
+  () => {
+    fetchData()
+  }
+)
 </script>
 
 <style scoped>

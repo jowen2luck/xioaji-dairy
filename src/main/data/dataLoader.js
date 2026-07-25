@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
 import { LLMEnricher } from '../etl/llmEnricher.js'
-import { enrichRecord } from '../etl/simpleEnrichers.js'
+import { enrichRecord, cleanDataForSave } from '../../utils/diary-plugin/index.js'
 
 // 数据存储路径
 const dataPath = path.join(app.getPath('userData'), 'appData.json')
@@ -137,15 +137,7 @@ export async function saveData(newData) {
     }
     
     // 只保存原始字段(去除 _meta_ 和 _ai_meta 字段,避免冗余)
-    const cleanedData = mergedData.map(item => {
-      const cleaned = { ...item }
-      Object.keys(cleaned).forEach(key => {
-        if (key.startsWith('_meta_') || key === '_ai_meta') {
-          delete cleaned[key]
-        }
-      })
-      return cleaned
-    })
+    const cleanedData = cleanDataForSave(mergedData)
     
     fs.writeFileSync(dataPath, JSON.stringify(cleanedData, null, 2))
     console.log(`[DataLoader] Saved ${cleanedData.length} records`)

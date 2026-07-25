@@ -147,26 +147,10 @@ export default {
   common: commonConfig
 }
 
-// 加载配置（优先从 localStorage，否则使用默认值）
-export function loadChartsConfig() {
-  try {
-    const saved = localStorage.getItem('charts-config')
-    if (saved) {
-      const parsed = JSON.parse(saved)
-      return {
-        resonance: { ...resonanceConfig, ...parsed.resonance },
-        quadrant: { ...quadrantConfig, ...parsed.quadrant },
-        heatmap: { ...heatmapConfig, ...parsed.heatmap },
-        energyWeather: { ...energyWeatherConfig, ...parsed.energyWeather },
-        pyramid: { ...pyramidConfig, ...parsed.pyramid },
-        temporalAnchor: { ...temporalAnchorConfig, ...parsed.temporalAnchor },
-        causality: { ...causalityConfig, ...parsed.causality },
-        common: { ...commonConfig, ...parsed.common }
-      }
-    }
-  } catch (e) {
-    console.warn('加载图表配置失败，使用默认配置', e)
-  }
+const SETTINGS_KEY = 'charts'
+const LS_KEY = 'charts-config'
+
+export function getDefaultChartsConfig() {
   return {
     resonance: resonanceConfig,
     quadrant: quadrantConfig,
@@ -179,10 +163,74 @@ export function loadChartsConfig() {
   }
 }
 
-// 保存配置到 localStorage
-export function saveChartsConfig(config) {
+export function loadChartsConfig() {
+  const ipc = globalThis?.electron?.ipcRenderer
+
+  const readFromFile = () => {
+    try {
+      if (!ipc?.sendSync) return null
+      return ipc.sendSync('settings:get-sync', SETTINGS_KEY)
+    } catch {
+      return null
+    }
+  }
+
+  const tryMigrateFromLocalStorage = () => {
+    try {
+      const raw = localStorage.getItem(LS_KEY)
+      if (!raw) return null
+      const parsed = JSON.parse(raw)
+      if (ipc?.sendSync) {
+        ipc.sendSync('settings:set-sync', { key: SETTINGS_KEY, value: parsed })
+        localStorage.removeItem(LS_KEY)
+      }
+      return parsed
+    } catch {
+      return null
+    }
+  }
+
   try {
-    localStorage.setItem('charts-config', JSON.stringify(config))
+    const persisted = readFromFile() ?? tryMigrateFromLocalStorage()
+    if (persisted) {
+      const parsed = persisted || {}
+      return {
+        resonance: { ...resonanceConfig, ...(parsed.resonance || {}) },
+        quadrant: { ...quadrantConfig, ...(parsed.quadrant || {}) },
+        heatmap: { ...heatmapConfig, ...(parsed.heatmap || {}) },
+        energyWeather: { ...energyWeatherConfig, ...(parsed.energyWeather || {}) },
+        pyramid: { ...pyramidConfig, ...(parsed.pyramid || {}) },
+        temporalAnchor: { ...temporalAnchorConfig, ...(parsed.temporalAnchor || {}) },
+        causality: { ...causalityConfig, ...(parsed.causality || {}) },
+        common: { ...commonConfig, ...(parsed.common || {}) }
+      }
+    }
+  } catch (e) {
+    console.warn('加载图表配置失败，使用默认配置', e)
+  }
+  return getDefaultChartsConfig()
+}
+
+export function saveChartsConfig(config) {
+  const ipc = globalThis?.electron?.ipcRenderer
+  let plainConfig = config
+  try {
+    // 移除 Vue 的 Proxy 代理，避免触发 "An object could not be cloned." 错误
+    plainConfig = JSON.parse(JSON.stringify(config))
+  } catch (e) {
+    console.warn('转换为普通对象失败:', e)
+  }
+  
+  try {
+    if (ipc?.sendSync) {
+      ipc.sendSync('settings:set-sync', { key: SETTINGS_KEY, value: plainConfig })
+      return
+    }
+  } catch (e) {
+    console.error('保存图表配置失败', e)
+  }
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(plainConfig))
   } catch (e) {
     console.error('保存图表配置失败', e)
   }

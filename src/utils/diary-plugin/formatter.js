@@ -1,6 +1,6 @@
 /**
- * 简单 ETL 增强器
- * 功能：不依赖大模型的数据预处理与增强
+ * 数据预处理与增强格式化器 (Formatter)
+ * 不依赖环境上下文，纯函数实现
  */
 
 /**
@@ -28,39 +28,7 @@ export function extractPlainText(html) {
   return html.replace(/<[^>]+>/g, '').trim()
 }
 
-/**
- * 情绪量化(将主观体验映射为 -2 到 +2 的分数)
- */
-export function calculateMoodScore(tiyan, xinqing) {
-  let score = 0
-  
-  const tiyanText = (tiyan || '').toLowerCase()
-  const positiveWords = ['心流', '愉快', '开心', '顺利', '高兴', '满意', '成功', '棒']
-  const negativeWords = ['疲惫', '焦虑', '烦躁', '沮丧', '糟糕', '失败', '崩溃', '难过']
-  
-  for (const word of positiveWords) {
-    if (tiyanText.includes(word)) score += 0.5
-  }
-  for (const word of negativeWords) {
-    if (tiyanText.includes(word)) score -= 0.5
-  }
-  
-  const colorMap = {
-    '#FF0000': -2,
-    '#FFA500': -1,
-    '#FFFF00': 1,
-    '#90EE90': 0.5,
-    '#87CEEB': -0.5,
-    '#9370DB': 2,
-    '#FFFFFF': 0
-  }
-  
-  if (xinqing && colorMap[xinqing] !== undefined) {
-    score += colorMap[xinqing]
-  }
-  
-  return Math.max(-2, Math.min(2, score))
-}
+
 
 /**
  * 星期几的中文转换
@@ -82,7 +50,7 @@ export function getTimeRange(hour) {
 }
 
 /**
- * 核心 ETL 函数:数据增强
+ * 核心 ETL 函数:数据增强格式化
  * 将原始数据项注入可计算的元数据字段
  */
 export function enrichRecord(item) {
@@ -113,11 +81,27 @@ export function enrichRecord(item) {
     _meta_text_length: extractPlainText(item.ganshou).length,
     
     // === 情绪维度特征 ===
-    _meta_mood_score: calculateMoodScore(item.tiyan, item.xinqing),
     _meta_emotion_raw: item.tiyan || '常规',
     
     // === 辅助字段 ===
     _meta_id: item._id || `${item.time}_${item.shanggexiangmu}_${item.ganshou}`.substring(0, 50),
     _meta_created_at: new Date().toISOString(),
   }
+}
+
+/**
+ * 数据脱水：移除生成的元数据字段，准备保存
+ * @param {Array} mergedData
+ * @returns {Array} 清理后的原始数据数组
+ */
+export function cleanDataForSave(mergedData) {
+  return mergedData.map(item => {
+    const cleaned = { ...item }
+    Object.keys(cleaned).forEach(key => {
+      if (key.startsWith('_meta_') || key === '_ai_meta') {
+        delete cleaned[key]
+      }
+    })
+    return cleaned
+  })
 }

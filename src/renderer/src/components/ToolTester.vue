@@ -176,6 +176,25 @@ import {
 
 const message = useMessage()
 
+const ipc = window?.electron?.ipcRenderer
+const readSetting = (key) => {
+  try {
+    if (!ipc?.sendSync) return null
+    return ipc.sendSync('settings:get-sync', key)
+  } catch {
+    return null
+  }
+}
+
+const writeSetting = (key, value) => {
+  try {
+    if (!ipc?.sendSync) return false
+    return ipc.sendSync('settings:set-sync', { key, value }) === true
+  } catch {
+    return false
+  }
+}
+
 // ==================== State ====================
 const toolOptions = [
   { label: 'calendar_resolver', value: 'calendar_resolver' },
@@ -457,9 +476,18 @@ onMounted(() => {
 
 function loadCustomCases() {
   try {
+    const fromFile = readSetting('tool_tester_cases')
+    if (Array.isArray(fromFile)) {
+      customCases.value = fromFile
+      return
+    }
+
     const saved = localStorage.getItem('tool_tester_cases')
-    if (saved) {
-      customCases.value = JSON.parse(saved)
+    if (!saved) return
+    const parsed = JSON.parse(saved)
+    if (Array.isArray(parsed)) {
+      customCases.value = parsed
+      if (writeSetting('tool_tester_cases', parsed)) localStorage.removeItem('tool_tester_cases')
     }
   } catch (e) {
     console.error('Failed to load custom cases', e)
@@ -467,6 +495,7 @@ function loadCustomCases() {
 }
 
 function saveCustomCases() {
+  if (writeSetting('tool_tester_cases', customCases.value)) return
   localStorage.setItem('tool_tester_cases', JSON.stringify(customCases.value))
 }
 

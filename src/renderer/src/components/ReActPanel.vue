@@ -408,6 +408,7 @@ const getTagType = (step) => {
   const action = step.action || step.type
   const types = {
     user_query: 'info',
+    thinking: 'info',
     tool_calls: 'warning',
     final_answer: 'success',
     loading: 'default',
@@ -421,6 +422,7 @@ const getStepLabel = (step) => {
   const action = step.action || step.type
   const labels = {
     user_query: '用户输入',
+    thinking: `推理 ${step.iteration || ''}`,
     tool_calls: `迭代 ${step.iteration || ''}`,
     final_answer: '最终答案',
     loading: '处理中',
@@ -442,6 +444,11 @@ const getStepTitle = (step) => {
     return `调用工具: ${toolNames}`
   }
   
+  if (action === 'thinking' && step.tools) {
+    const toolNames = step.tools.map(t => getToolLabel(t.name || t)).join('、')
+    return `规划工具: ${toolNames}`
+  }
+
   if (action === 'final_answer') {
     return '生成最终回复'
   }

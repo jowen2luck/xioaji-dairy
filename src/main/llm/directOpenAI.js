@@ -11,6 +11,7 @@ const API_KEY_MAP = {
   'https://dashscope.aliyuncs.com/compatible-mode/v1': 'DASHSCOPE_API_KEY_QWEN',
   'https://dashscope.aliyuncs.com/api/v1': 'DASHSCOPE_API_KEY',  // 新增：百炼 API 端点
   'https://uni-api.cstcloud.cn/v1': 'DASHSCOPE_API_KEY_SCTCLOUD',
+  'http://127.0.0.1:8045/v1': 'OPENAI_API_KEY',
   'https://api.openai.com/v1': 'OPENAI_API_KEY'
 }
 
@@ -27,7 +28,93 @@ function getAPIKeyForBaseURL(baseURL) {
   }
   
   // 如果没有找到特定的 API Key，则回退到默认的 API Key
-  return process.env.DASHSCOPE_API_KEY || process.env.OPENAI_API_KEY || ''
+  return process.env.ANTI_DASHSCOPE_API_KEY || process.env.DASHSCOPE_API_KEY || process.env.OPENAI_API_KEY || ''
+}
+
+function isImageModel(model) {
+  const m = String(model || '').toLowerCase()
+  return m.includes('pro-image') || /(^|-)image($|-)/.test(m)
+}
+
+function extractImageFromText(text) {
+  const s = String(text || '')
+  const md = s.match(/!\[[^\]]*?\]\((.*?)\)/)
+  if (md && md[1]) return md[1].trim()
+  const data = s.match(/data:image\/[a-zA-Z0-9.+-]+;base64,[a-zA-Z0-9+/=]+/)
+  if (data) return data[0]
+  const url = s.match(/https?:\/\/[^\s)\"']+/)
+  if (url) return url[0]
+  return null
+}
+
+function extractImageFromResponse(obj) {
+  if (!obj || typeof obj !== 'object') return null
+
+  const directText =
+    obj?.output?.choices?.[0]?.message?.content ??
+    obj?.choices?.[0]?.message?.content ??
+    obj?.content
+
+  if (typeof directText === 'string') {
+    const src = extractImageFromText(directText)
+    if (src) return { src, via: 'message.content' }
+    try {
+      const parsed = JSON.parse(directText)
+      const nested = extractImageFromResponse(parsed)
+      if (nested) return nested
+    } catch {}
+  }
+
+  const data = obj.data
+  if (Array.isArray(data) && data.length > 0) {
+    const b64Json = data[0]?.b64_json
+    if (typeof b64Json === 'string' && b64Json.length > 50) {
+      return { src: `data:image/png;base64,${b64Json}`, via: 'b64_json' }
+    }
+    const url = data[0]?.url
+    if (typeof url === 'string' && url.startsWith('http')) {
+      return { src: url, via: 'url' }
+    }
+  }
+
+  if (typeof obj.b64_json === 'string' && obj.b64_json.length > 50) {
+    return { src: `data:image/png;base64,${obj.b64_json}`, via: 'b64_json' }
+  }
+  if (typeof obj.url === 'string' && obj.url.startsWith('http')) {
+    return { src: obj.url, via: 'url' }
+  }
+
+  const visited = new Set()
+  const queue = [{ v: obj, depth: 0 }]
+  while (queue.length > 0) {
+    const { v, depth } = queue.shift()
+    if (v == null || depth > 6) continue
+
+    if (typeof v === 'string') {
+      const src = extractImageFromText(v)
+      if (src) return { src, via: 'scan:string' }
+      continue
+    }
+
+    if (typeof v !== 'object') continue
+    if (visited.has(v)) continue
+    visited.add(v)
+
+    if (Array.isArray(v)) {
+      for (const vv of v) queue.push({ v: vv, depth: depth + 1 })
+      continue
+    }
+
+    if (typeof v.b64_json === 'string' && v.b64_json.length > 50) {
+      return { src: `data:image/png;base64,${v.b64_json}`, via: 'scan:b64_json' }
+    }
+    if (typeof v.url === 'string' && v.url.startsWith('http')) {
+      return { src: v.url, via: 'scan:url' }
+    }
+    for (const vv of Object.values(v)) queue.push({ v: vv, depth: depth + 1 })
+  }
+
+  return null
 }
 
 /**
@@ -53,7 +140,12 @@ export async function callOpenAIAPI(options) {
     top_p = 0.9,
     apiKey: providedApiKey,
     enableThinking = false,  // 新增：深度思考参数
-    maxRetries = 2  // 添加重试参数
+    maxRetries = 2,  // 添加重试参数
+    onContentDelta,
+    onReasoningDelta,
+    onToolCallsDelta,
+    extraBody,
+    stream,
   } = options
 
   // 获取 API 密钥
@@ -86,11 +178,22 @@ export async function callOpenAIAPI(options) {
   
     const protocol = url.protocol === 'https:' ? https : http
 
+  const streamEnabled = typeof stream === 'boolean'
+    ? stream
+    : (isImageModel(model) ? false : true)
+
   const payload = {
     model,
     messages,
     temperature,
     top_p,
+    stream: streamEnabled
+  }
+
+  if (extraBody && typeof extraBody === 'object') {
+    for (const [k, v] of Object.entries(extraBody)) {
+      if (k && v !== undefined) payload[k] = v
+    }
   }
   
   // 新增：如果启用深度思考，添加参数
@@ -120,26 +223,117 @@ export async function callOpenAIAPI(options) {
 
       const req = protocol.request(url, requestOptions, (res) => {
         let data = ''
+        let buffer = ''
+        let content = ''
+        let reasoningContent = ''
+        const toolCallsMap = new Map()
+        const contentType = res.headers['content-type'] || ''
+        const isStream = contentType.includes('text/event-stream')
+
+        const flushLine = (line) => {
+          const trimmed = line.trim()
+          if (!trimmed || !trimmed.startsWith('data:')) return
+          const payloadStr = trimmed.slice(5).trim()
+          if (!payloadStr || payloadStr === '[DONE]') return
+          let parsed
+          try {
+            parsed = JSON.parse(payloadStr)
+          } catch {
+            return
+          }
+          const choice = parsed.output?.choices?.[0] || parsed.choices?.[0]
+          const delta = choice?.delta || choice?.message || {}
+          if (delta.content) {
+            content += delta.content
+            if (typeof onContentDelta === 'function') {
+              try { onContentDelta(delta.content) } catch {}
+            }
+          }
+          if (delta.reasoning_content) {
+            reasoningContent += delta.reasoning_content
+            if (typeof onReasoningDelta === 'function') {
+              try { onReasoningDelta(delta.reasoning_content) } catch {}
+            }
+          }
+          const toolCalls = delta.tool_calls || []
+          for (const call of toolCalls) {
+            const index = call.index ?? 0
+            const existing = toolCallsMap.get(index) || { id: call.id, function: { name: '', arguments: '' } }
+            if (call.id) existing.id = call.id
+            if (call.function?.name) existing.function.name = call.function.name
+            if (typeof call.function?.arguments === 'string') {
+              existing.function.arguments += call.function.arguments
+            }
+            toolCallsMap.set(index, existing)
+          }
+          if (toolCalls.length > 0 && typeof onToolCallsDelta === 'function') {
+            try { onToolCallsDelta(toolCalls) } catch {}
+          }
+        }
 
         res.on('data', (chunk) => {
-          data += chunk
+          const chunkStr = chunk.toString()
+          if (isStream) {
+            buffer += chunkStr
+            const lines = buffer.split('\n')
+            buffer = lines.pop() || ''
+            for (const line of lines) {
+              flushLine(line)
+            }
+          } else {
+            data += chunkStr
+          }
         })
 
         res.on('end', () => {
           try {
+            if (isStream) {
+              if (buffer) {
+                const lines = buffer.split('\n')
+                for (const line of lines) {
+                  flushLine(line)
+                }
+              }
+              const tool_calls = Array.from(toolCallsMap.values()).map(call => ({
+                id: call.id,
+                type: 'function',
+                function: call.function
+              }))
+              const image = isImageModel(model) ? extractImageFromText(content) : null
+              resolve({
+                content,
+                choices: [],
+                tool_calls,
+                reasoning_content: reasoningContent || undefined,
+                image: image ? { src: image, via: 'stream:content' } : undefined,
+                raw: { stream: true }
+              })
+              return
+            }
             if (res.statusCode === 200) {
               const response = JSON.parse(data)
               console.log('[DirectOpenAI] Response:', JSON.stringify(response, null, 2))
-              
-              // 提取思考内容（DashScope 格式）
               const reasoningContent = response.output?.choices?.[0]?.message?.reasoning_content 
                 || response.choices?.[0]?.message?.reasoning_content
-              
+              const originalContent = response.output?.choices?.[0]?.message?.content || response.choices?.[0]?.message?.content || ''
+              let finalContent = originalContent
+              let image = null
+              if (isImageModel(model)) {
+                const found = extractImageFromResponse(response)
+                if (found?.src) {
+                  image = found
+                  const embedded = extractImageFromText(originalContent)
+                  if (!embedded) {
+                    finalContent = `![generated](${found.src})`
+                  }
+                }
+              }
               resolve({
-                content: response.output?.choices?.[0]?.message?.content || response.choices?.[0]?.message?.content || '',
+                content: finalContent,
                 choices: response.output?.choices || response.choices,
                 tool_calls: response.output?.choices?.[0]?.message?.tool_calls || response.choices?.[0]?.message?.tool_calls,
-                reasoning_content: reasoningContent,  // 新增：推理内容
+                reasoning_content: reasoningContent,
+                image: image || undefined,
                 raw: response,
               })
             } else {

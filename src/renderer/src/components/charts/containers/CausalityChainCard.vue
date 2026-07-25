@@ -67,13 +67,20 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { NCard, NSpace, NButton, NIcon, NSpin, NAlert, NTag, NEmpty, NSelect } from 'naive-ui'
 import { RefreshOutline } from '@vicons/ionicons5'
 
+const props = defineProps({
+  refreshKey: {
+    type: Number,
+    default: 0
+  }
+})
+
 const loading = ref(false)
 const error = ref(null)
-const rawRecords = ref([])
+const causalityFlows = ref([])
 const selectedMood = ref('焦虑')
 
 const moodOptions = [
@@ -84,82 +91,21 @@ const moodOptions = [
   { label: '满足', value: '满足' }
 ]
 
-// 提取关键词（简单实现）
-function extractKeywords(text) {
-  if (!text || typeof text !== 'string') return []
-  
-  // 使用正则匹配中文词组（2-6字）
-  const matches = text.match(/[\u4e00-\u9fa5]{2,6}/g) || []
-  
-  // 统计词频
-  const wordFreq = {}
-  matches.forEach(word => {
-    wordFreq[word] = (wordFreq[word] || 0) + 1
-  })
-  
-  // 返回 Top 5 高频词
-  return Object.entries(wordFreq)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
-    .map(([word, count]) => ({ word, count }))
-}
-
-// 因果流数据
-const causalityFlows = computed(() => {
-  if (rawRecords.value.length === 0) return []
-  
-  // 收集所有 root_cause
-  const allCauses = rawRecords.value
-    .map(r => r._ai_meta?.root_cause)
-    .filter(Boolean)
-    .join(' ')
-  
-  // 提取关键词
-  const keywords = extractKeywords(allCauses)
-  
-  // 为每个关键词构建行为链
-  return keywords.map(kw => {
-    // 找出包含该关键词的记录
-    const relatedRecords = rawRecords.value.filter(r =>
-      r._ai_meta?.root_cause?.includes(kw.word)
-    )
-    
-    // 统计对应的行为
-    const actionCount = {}
-    relatedRecords.forEach(r => {
-      const action = r._ai_meta?.main_action
-      if (action) {
-        actionCount[action] = (actionCount[action] || 0) + 1
-      }
-    })
-    
-    // 转换为数组
-    const actions = Object.entries(actionCount)
-      .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 3)
-    
-    return {
-      cause: kw.word,
-      count: kw.count,
-      actions
-    }
-  })
-})
-
 // 分析数据
 async function analyze() {
   loading.value = true
   error.value = null
 
   try {
-    // 获取特定情绪的记录
     const result = await window.electron.ipcRenderer.invoke(
       'tool-execute',
-      'query_records',
+      'insight_analyst',
       {
-        moodTags: [selectedMood.value],
-        limit: 200
+        analysisType: 'causality_chain',
+        params: {
+          moodTag: selectedMood.value,
+          limit: 200
+        }
       }
     )
 
@@ -167,12 +113,10 @@ async function analyze() {
       throw new Error(result.data?.error || '数据获取失败')
     }
 
-    const toolData = result.data.data || result.data
-    rawRecords.value = toolData.records || []
-
-    if (rawRecords.value.length === 0) {
-      throw new Error(`暂无"${selectedMood.value}"相关的记录`)
-    }
+    const toolPayload = result.data?.data || null
+    const analysis = toolPayload?.data || null
+    const flows = analysis?.flows || []
+    causalityFlows.value = Array.isArray(flows) ? flows : []
 
   } catch (err) {
     console.error('[CausalityChainCard] 分析失败:', err)
@@ -185,6 +129,13 @@ async function analyze() {
 onMounted(() => {
   analyze()
 })
+
+watch(
+  () => props.refreshKey,
+  () => {
+    analyze()
+  }
+)
 </script>
 
 <style scoped>

@@ -58,74 +58,42 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { NCard, NButton, NIcon, NSpin, NAlert, NTag, NSpace, NDivider, NGrid, NGi, NStatistic } from 'naive-ui'
 import { RefreshOutline, CheckmarkCircleOutline } from '@vicons/ionicons5'
 import ScatterChart from '../base/ScatterChart.vue'
 import { quadrantConfig } from '../../../config/chartsConfig.js'
 
+const props = defineProps({
+  refreshKey: {
+    type: Number,
+    default: 0
+  }
+})
+
 const loading = ref(false)
 const error = ref(null)
-const rawData = ref([])
+const points = ref([])
+const backendStats = ref(null)
 
 // 散点数据
 const scatterData = computed(() => {
-  return rawData.value.map(record => ({
-    energy: record._ai_meta?.energy_level || 0,
-    agency: record._ai_meta?.agency_level || 0,
-    label: record._ai_meta?.main_action || '未知',
-    tooltip: record._ai_meta?.root_cause || ''
-  }))
+  return points.value || []
 })
 
 // 象限统计
 const quadrantStats = computed(() => {
-  if (rawData.value.length === 0) return null
-
-  const stats = {
-    flow: { label: quadrantConfig.labels.flow, count: 0, percentage: 0 },
-    relax: { label: quadrantConfig.labels.relax, count: 0, percentage: 0 },
-    fight: { label: quadrantConfig.labels.fight, count: 0, percentage: 0 },
-    helpless: { label: quadrantConfig.labels.helpless, count: 0, percentage: 0 }
-  }
-
-  // 获取分界线：使用配置中的固定值，或动态计算中位数
-  let energyMidpoint = quadrantConfig.energyMidpoint
-  let agencyMidpoint = quadrantConfig.agencyMidpoint
-
-  if (energyMidpoint === null || agencyMidpoint === null) {
-    // 动态计算中位数（注意：需要复制数组以避免修改原数组）
-    const energies = rawData.value.map(r => r._ai_meta?.energy_level || 5)
-    const agencies = rawData.value.map(r => r._ai_meta?.agency_level || 0)
-    
-    // 使用展开运算符复制数组后再排序
-    if (energyMidpoint === null) {
-      const sortedEnergies = [...energies].sort((a, b) => a - b)
-      energyMidpoint = sortedEnergies[Math.floor(sortedEnergies.length / 2)]
+  if (!backendStats.value) return null
+  const keys = ['flow', 'relax', 'fight', 'helpless']
+  const mapped = {}
+  keys.forEach(k => {
+    mapped[k] = {
+      label: quadrantConfig.labels[k],
+      count: backendStats.value[k]?.count || 0,
+      percentage: backendStats.value[k]?.percentage || 0
     }
-    if (agencyMidpoint === null) {
-      const sortedAgencies = [...agencies].sort((a, b) => a - b)
-      agencyMidpoint = sortedAgencies[Math.floor(sortedAgencies.length / 2)]
-    }
-  }
-
-  rawData.value.forEach(record => {
-    const energy = record._ai_meta?.energy_level || 5
-    const agency = record._ai_meta?.agency_level || 0
-
-    // 使用分界线判断象限
-    if (energy >= energyMidpoint && agency >= agencyMidpoint) stats.flow.count++
-    else if (energy < energyMidpoint && agency >= agencyMidpoint) stats.relax.count++
-    else if (energy >= energyMidpoint && agency < agencyMidpoint) stats.fight.count++
-    else stats.helpless.count++
   })
-
-  const total = rawData.value.length
-  Object.keys(stats).forEach(key => {
-    stats[key].percentage = Math.round((stats[key].count / total) * 100)
-  })
-
-  return stats
+  return mapped
 })
 
 // 获取数据
@@ -136,28 +104,24 @@ async function fetchData() {
   try {
     const result = await window.electron.ipcRenderer.invoke(
       'tool-execute',
-      'query_records',
-      { limit: 500 }
+      'insight_analyst',
+      {
+        analysisType: 'state_matrix',
+        params: {
+          energyMidpoint: quadrantConfig.energyMidpoint,
+          agencyMidpoint: quadrantConfig.agencyMidpoint
+        }
+      }
     )
 
     if (result.isError || !result.data) {
       throw new Error(result.data?.error || '数据获取失败')
     }
 
-    // ToolResult 多层嵌套：result.data.data 包含 records 属性
-    const toolData = result.data?.data || result.data
-    const records = toolData?.records || []
-
-    // 过滤有效数据
-    rawData.value = records.filter(r =>
-      r._ai_meta &&
-      typeof r._ai_meta.energy_level === 'number' &&
-      typeof r._ai_meta.agency_level === 'number'
-    )
-
-    if (rawData.value.length === 0) {
-      throw new Error('暂无可用的状态数据')
-    }
+    const toolPayload = result.data?.data || null
+    const analysis = toolPayload?.data || null
+    points.value = Array.isArray(analysis?.points) ? analysis.points : []
+    backendStats.value = analysis?.quadrantStats || null
 
   } catch (err) {
     console.error('[StateMatrixCard] 数据获取失败:', err)
@@ -174,6 +138,13 @@ function refresh() {
 onMounted(() => {
   fetchData()
 })
+
+watch(
+  () => props.refreshKey,
+  () => {
+    fetchData()
+  }
+)
 </script>
 
 <style scoped>

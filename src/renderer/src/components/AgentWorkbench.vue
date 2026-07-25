@@ -37,19 +37,35 @@
                       </template>
                       复制
                     </n-tooltip>
+                    <n-tooltip v-if="m.sender === 'agent' && hasImage(m.content)" trigger="hover">
+                      <template #trigger>
+                        <n-button
+                          quaternary
+                          circle
+                          size="tiny"
+                          class="action-btn"
+                          @click="saveImageFromMessage(m.content)"
+                        >
+                          <template #icon>
+                            <n-icon size="14"><SaveIcon /></n-icon>
+                          </template>
+                        </n-button>
+                      </template>
+                      保存图片
+                    </n-tooltip>
                     <!-- 思维记录切换按钮 -->
                     <n-tooltip v-if="m.reactIndex !== undefined" trigger="hover">
                       <template #trigger>
                         <n-button 
-                          quaternary 
-                          circle 
-                          size="tiny" 
-                          class="action-btn"
+                          tertiary
+                          size="tiny"
+                          class="thought-btn"
                           @click="scrollToReactStep(m.reactIndex, m.conversationId)"
                         >
                           <template #icon>
                             <n-icon size="14"><BrainIcon /></n-icon>
                           </template>
+                          思维
                         </n-button>
                       </template>
                       查看思维记录
@@ -77,7 +93,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick, watch, computed, h } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, watch, computed, h } from 'vue'
 import { useMessage } from 'naive-ui'
 import { loadConfig, saveConfig, DEFAULT_CONFIG } from '@renderer/config/assistant'
 import ReActPanel from './ReActPanel.vue'
@@ -85,11 +101,53 @@ import MarkdownRenderer from './MarkdownRenderer.vue'
 
 const message = useMessage()
 
+const ipc = window?.electron?.ipcRenderer
+const readSetting = (key) => {
+  try {
+    if (!ipc?.sendSync) return null
+    return ipc.sendSync('settings:get-sync', key)
+  } catch {
+    return null
+  }
+}
+
+const writeSetting = (key, value) => {
+  try {
+    if (!ipc?.sendSync) return false
+    return ipc.sendSync('settings:set-sync', { key, value }) === true
+  } catch {
+    return false
+  }
+}
+
+const loadJsonSetting = (key) => {
+  const fromFile = readSetting(key)
+  if (fromFile !== null && fromFile !== undefined) return fromFile
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (writeSetting(key, parsed)) localStorage.removeItem(key)
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+const saveJsonSetting = (key, value) => {
+  if (writeSetting(key, value)) return
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch {}
+}
+
 // 思维图标
 const BrainIcon = { render: () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', innerHTML: '<path fill="currentColor" d="M12 2a9 9 0 0 0-9 9c0 4.17 2.84 7.67 6.69 8.69L12 22l2.31-2.31C18.16 18.67 21 15.17 21 11a9 9 0 0 0-9-9m0 2c1.66 0 3 1.34 3 3s-1.34 3-3 3s-3-1.34-3-3s1.34-3 3-3"/>' }) }
 
 // 复制图标
 const CopyIcon = { render: () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', innerHTML: '<path fill="currentColor" d="M19 2H9c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H9V4h10v12zM5 6H3v14c0 1.1.9 2 2 2h14v-2H5V6z"/>' }) }
+
+const SaveIcon = { render: () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', innerHTML: '<path fill="currentColor" d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7zm-5 16a3 3 0 1 1 0-6a3 3 0 0 1 0 6m3-10H5V5h10z"/>' }) }
 
 const messages = ref([])
 const input = ref('')
@@ -105,6 +163,10 @@ const conversationReacts = ref({})
 
 // 布局就绪状态 - 用于控制透明度，实现无闪烁滚动
 const isLayoutReady = ref(false)
+const currentRequestId = ref(null)
+const currentConversationId = ref(null)
+const streamIndex = ref(null)
+let unsubscribeAssistantEvents = null
 
 // 自动滚动到底部
 const scrollToBottom = async (smooth = false) => {
@@ -151,12 +213,7 @@ const clearReActSteps = () => {
 const saveCurrentReacts = (conversationId) => {
   if (conversationId && reactSteps.value.length > 0) {
     conversationReacts.value[conversationId] = [...reactSteps.value]
-    // 持久化到 localStorage
-    try {
-      localStorage.setItem('assistant-reacts', JSON.stringify(conversationReacts.value))
-    } catch (e) {
-      console.error('保存思维记录失败', e)
-    }
+    saveJsonSetting('assistant-reacts', conversationReacts.value)
   }
 }
 
@@ -171,27 +228,104 @@ const handleSettingsUpdate = (event) => {
 onMounted(async () => {
   // 监听设置更新事件
   window.addEventListener('settings-updated', handleSettingsUpdate)
+  if (typeof window.assistant?.onEvent === 'function') {
+    unsubscribeAssistantEvents = window.assistant.onEvent(async (payload) => {
+      const reqId = currentRequestId.value
+      if (!payload || !reqId || payload.requestId !== reqId) return
+
+      const removeLoadingStep = () => {
+        for (let i = reactSteps.value.length - 1; i >= 0; i--) {
+          const action = reactSteps.value[i]?.action || reactSteps.value[i]?.type
+          if (action === 'loading') {
+            reactSteps.value.splice(i, 1)
+            break
+          }
+        }
+      }
+
+      const { type, data } = payload
+      if (type === 'step' && data?.step) {
+        removeLoadingStep()
+        const step = data.step
+        addReActStep({
+          ...step,
+          type: step.action,
+          time: new Date(step.timestamp || Date.now())
+        })
+
+        if (step.action === 'final_answer' && streamIndex.value !== null) {
+          const idx = streamIndex.value
+          if (messages.value[idx]) {
+            messages.value[idx].reactIndex = reactSteps.value.length - 1
+            messages.value[idx].conversationId = currentConversationId.value
+            saveJsonSetting('assistant-conversation', messages.value)
+          }
+        }
+
+        await scrollToBottom()
+        return
+      }
+
+      if (type === 'final_start') {
+        removeLoadingStep()
+        if (streamIndex.value === null) {
+          const idx = messages.value.length
+          streamIndex.value = idx
+          messages.value.push({
+            content: '',
+            sender: 'agent',
+            time: new Date().toISOString(),
+            isStreaming: true,
+            conversationId: currentConversationId.value
+          })
+          await scrollToBottom()
+        }
+        return
+      }
+
+      if (type === 'final_delta') {
+        if (streamIndex.value === null) return
+        const idx = streamIndex.value
+        if (!messages.value[idx]) return
+        messages.value[idx].content += data?.delta || ''
+        await scrollToBottom()
+        return
+      }
+
+      if (type === 'final_end') {
+        if (streamIndex.value === null) return
+        const idx = streamIndex.value
+        if (messages.value[idx]) {
+          messages.value[idx].isStreaming = false
+        }
+        saveJsonSetting('assistant-conversation', messages.value)
+        await scrollToBottom()
+        return
+      }
+
+      if (type === 'error') {
+        removeLoadingStep()
+        const msg = data?.message || '执行失败'
+        addReActStep({ type: 'error', action: 'error', reasoning: msg, timestamp: new Date().toISOString() })
+        messages.value.push({ content: msg, sender: 'agent', time: new Date().toISOString(), conversationId: currentConversationId.value })
+        saveJsonSetting('assistant-conversation', messages.value)
+        await scrollToBottom()
+      }
+    })
+  }
   
   // 加载历史会话
   try {
-    const raw = localStorage.getItem('assistant-conversation')
-    if (raw) {
-      const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed)) messages.value = parsed
-    }
+    const parsed = loadJsonSetting('assistant-conversation')
+    if (Array.isArray(parsed)) messages.value = parsed
   } catch (e) {
     console.error('加载历史会话失败', e)
   }
   
   // 加载历史思维记录
   try {
-    const reactsRaw = localStorage.getItem('assistant-reacts')
-    if (reactsRaw) {
-      const parsed = JSON.parse(reactsRaw)
-      if (parsed && typeof parsed === 'object') {
-        conversationReacts.value = parsed
-      }
-    }
+    const parsed = loadJsonSetting('assistant-reacts')
+    if (parsed && typeof parsed === 'object') conversationReacts.value = parsed
   } catch (e) {
     console.error('加载思维记录失败', e)
   }
@@ -212,12 +346,26 @@ onMounted(async () => {
   })
 })
 
+onUnmounted(() => {
+  window.removeEventListener('settings-updated', handleSettingsUpdate)
+  try {
+    if (typeof unsubscribeAssistantEvents === 'function') {
+      unsubscribeAssistantEvents()
+    }
+  } catch {}
+})
+
 const formatTime = (t) => {
   try {
     const d = t instanceof Date ? t : new Date(t)
     if (isNaN(d.getTime())) return ''
     return d.toLocaleTimeString('zh-CN')
   } catch { return '' }
+}
+
+const isImageModel = (model) => {
+  const m = String(model || '').toLowerCase()
+  return m.includes('pro-image') || /(^|-)image($|-)/.test(m)
 }
 
 async function send() {
@@ -227,12 +375,17 @@ async function send() {
 
   // 从全局配置加载
   const config = loadConfig()
+  const isImage = isImageModel(config.selectedModel)
 
   console.log('[send] input', text)
   sending.value = true
   
   // 生成对话ID
   const conversationId = `conv_${Date.now()}`
+  const requestId = crypto?.randomUUID ? crypto.randomUUID() : `req_${Date.now()}_${Math.random().toString(16).slice(2)}`
+  currentConversationId.value = conversationId
+  currentRequestId.value = requestId
+  streamIndex.value = null
   
   messages.value.push({ content: text, sender: 'user', time: new Date().toISOString(), reactIndex: 0, conversationId })
   input.value = ''
@@ -291,24 +444,32 @@ async function send() {
       messages: messagesPayload, 
       model: config.selectedModel, 
       baseURL: config.selectedBaseURL, 
-      tools, 
+      tools: isImage ? [] : tools,
       userQuery: text,
+      requestId,
       config: { 
         temperature: config.temperature, 
         top_p: config.top_p 
       },
       mock: false,
-      intentModel: config.intentModel
+      intentModel: config.intentModel,
+      disableTools: isImage ? true : undefined,
+      extraBody: isImage ? { size: '1024x1024' } : undefined,
     }
     console.log('[assistant:chat] request', requestConfig)
     
-    // 【改进】模拟流式步骤推送 - 启动轮询检查后端日志(简化版:直接等待结果)
     result = await window.assistant?.chat?.(requestConfig)
     console.log('[assistant:chat] result', result)
   } catch (e) {
     console.log('[assistant:chat] exception', e)
     // 移除加载状态，推送错误
-    reactSteps.value.splice(loadingStepIndex, 1)
+    for (let i = reactSteps.value.length - 1; i >= 0; i--) {
+      const action = reactSteps.value[i]?.action || reactSteps.value[i]?.type
+      if (action === 'loading') {
+        reactSteps.value.splice(i, 1)
+        break
+      }
+    }
     addReActStep({ 
       type: 'error', 
       action: 'error',
@@ -323,61 +484,37 @@ async function send() {
   }
 
   // 移除加载状态
-  reactSteps.value.splice(loadingStepIndex, 1)
+  for (let i = reactSteps.value.length - 1; i >= 0; i--) {
+    const action = reactSteps.value[i]?.action || reactSteps.value[i]?.type
+    if (action === 'loading') {
+      reactSteps.value.splice(i, 1)
+      break
+    }
+  }
 
   if (result?.success) {
-    // 从后端获取完整的 ReAct 步骤
-    const stateSteps = result.data?.state?.steps || []
-    console.log('[ReAct] Backend steps:', stateSteps)
-    
-    // 【改进】逐步推送 ReAct 迭代步骤,模拟实时显示
-    for (let i = 0; i < stateSteps.length; i++) {
-      const step = stateSteps[i]
-      addReActStep({
-        ...step,
-        type: step.action,
-        time: new Date(step.timestamp || Date.now())
-      })
-      
-      // 每个步骤之间添加短暂延迟,增强实时感
-      if (i < stateSteps.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 150))
-      }
-    }
-    
     // 获取最终答案
     const finalAnswer = result.data?.content
     
     if (finalAnswer) {
       console.log('[ReAct] Final answer received, length:', finalAnswer.length)
-      
-      // 添加最终答案步骤到思维链
-      addReActStep({
-        type: 'final_answer',
-        action: 'final_answer',
-        reasoning: '已根据工具结果生成最终回复',
-        timestamp: new Date().toISOString()
-      })
-      
-      // 【改进】流式输出最终答案(关联思维记录索引)
-      const streamIndex = messages.value.length
-      const finalReactIndex = reactSteps.value.length - 1 // 关联最后一个思维步骤
-      messages.value.push({ content: '', sender: 'agent', time: new Date().toISOString(), isStreaming: true, reactIndex: finalReactIndex, conversationId })
-      
-      // 增加流式打字速度,提升体验
-      await streamMessageContent(streamIndex, finalAnswer, 40, 50) // 更快的速度
-      messages.value[streamIndex].isStreaming = false
-      
-      // 保存当前对话的思维记录
+      if (streamIndex.value === null) {
+        messages.value.push({
+          content: finalAnswer,
+          sender: 'agent',
+          time: new Date().toISOString(),
+          conversationId
+        })
+      }
       saveCurrentReacts(conversationId)
-      
-      try { localStorage.setItem('assistant-conversation', JSON.stringify(messages.value)) } catch {}
+      saveJsonSetting('assistant-conversation', messages.value)
       await scrollToBottom()
       sending.value = false
       return
     }
     
     // 向后兼容：如果没有 finalAnswer 但有工具结果
+    const stateSteps = result.data?.state?.steps || []
     const toolSteps = stateSteps.filter(step => step.action === 'tool_calls')
     const allToolResults = []
     toolSteps.forEach(step => {
@@ -441,7 +578,7 @@ async function send() {
     
     await streamMessageContent(streamIndex, final, 40, 50)
     messages.value[streamIndex].isStreaming = false
-    try { localStorage.setItem('assistant-conversation', JSON.stringify(messages.value)) } catch {}
+    saveJsonSetting('assistant-conversation', messages.value)
     await scrollToBottom()
   } else {
     const errDetail = escapeHTML(JSON.stringify(result || {}, null, 2))
@@ -452,7 +589,7 @@ async function send() {
       timestamp: new Date().toISOString()
     })
     messages.value.push({ content: `<pre>${errDetail}</pre>`, sender: 'agent', time: new Date().toISOString() })
-    try { localStorage.setItem('assistant-conversation', JSON.stringify(messages.value)) } catch {}
+    saveJsonSetting('assistant-conversation', messages.value)
     await scrollToBottom()
   }
   
@@ -472,11 +609,11 @@ async function invoke(name) {
       timestamp: new Date().toISOString()
     })
     messages.value.push({ content: '工具调用完成', sender: 'agent', time: new Date() })
-    try { localStorage.setItem('assistant-conversation', JSON.stringify(messages.value)) } catch {}
+    saveJsonSetting('assistant-conversation', messages.value)
   } else {
     addReActStep({ type: 'error', action: 'error', reasoning: `失败：${res?.error}`, timestamp: new Date().toISOString() })
     messages.value.push({ content: `失败：${res?.error}`, sender: 'agent', time: new Date() })
-    try { localStorage.setItem('assistant-conversation', JSON.stringify(messages.value)) } catch {}
+    saveJsonSetting('assistant-conversation', messages.value)
   }
 }
 
@@ -510,6 +647,40 @@ const copyToClipboard = async (content) => {
       console.error('复制失败（降级方案也失败）:', fallbackErr)
       message.error('复制失败，请重试')
     }
+  }
+}
+
+const extractImageSrc = (text) => {
+  const s = String(text || '')
+  const md = s.match(/!\[[^\]]*?\]\((.*?)\)/)
+  if (md && md[1]) return md[1].trim()
+  const data = s.match(/data:image\/[a-zA-Z0-9.+-]+;base64,[a-zA-Z0-9+/=]+/)
+  if (data) return data[0]
+  const url = s.match(/https?:\/\/[^\s)\"']+/)
+  if (url) return url[0]
+  return null
+}
+
+const hasImage = (content) => !!extractImageSrc(content)
+
+const saveImageFromMessage = async (content) => {
+  try {
+    const src = extractImageSrc(content)
+    if (!src) {
+      message.error('未识别到图片')
+      return
+    }
+    const res = await window.assistant?.saveImage?.({ src })
+    if (res?.success && res?.filePath) {
+      message.success(`已保存：${res.filePath}`)
+      return
+    }
+    if (res?.canceled) {
+      return
+    }
+    message.error(res?.error?.message || '保存失败')
+  } catch (e) {
+    message.error(e?.message || '保存失败')
   }
 }
 
@@ -677,6 +848,28 @@ async function streamMessageContent(index, text, chunkSize = 80, interval = 60) 
 
 .bubble:hover .action-btn {
   opacity: 0.8;
+}
+
+.thought-btn {
+  border-radius: 999px;
+  padding: 0 10px;
+  height: 22px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  opacity: 0.9;
+  background: linear-gradient(135deg, rgba(94, 129, 244, 0.18), rgba(30, 211, 198, 0.14));
+  border: 1px solid rgba(94, 129, 244, 0.25);
+  transition: transform 0.15s ease, opacity 0.15s ease, border-color 0.15s ease;
+}
+
+.thought-btn:hover {
+  opacity: 1;
+  transform: translateY(-1px);
+  border-color: rgba(94, 129, 244, 0.45);
+}
+
+.bubble:hover .thought-btn {
+  opacity: 1;
 }
 
 /* 响应式布局 */

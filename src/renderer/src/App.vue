@@ -1,6 +1,6 @@
 <script setup>
 import Dashboard from './components/Dashboard.vue'
-import { NConfigProvider, NMessageProvider, darkTheme } from 'naive-ui'
+import { NConfigProvider, NDialogProvider, NMessageProvider, darkTheme } from 'naive-ui'
 import { ref, computed, onMounted } from 'vue'
 import { initTheme, getCurrentTheme, setTheme } from './utils/theme.js'
 
@@ -22,14 +22,6 @@ const handleThemeChange = (newTheme) => {
 
 onMounted(() => {
   currentTheme.value = getCurrentTheme()
-  // 监听 localStorage 变化
-  const handleStorageChange = () => {
-    const savedTheme = localStorage.getItem('app-theme')
-    if (savedTheme) {
-      currentTheme.value = savedTheme
-    }
-  }
-  window.addEventListener('storage', handleStorageChange)
   
   // 监听主题切换事件（其他器件程叨）
   window.addEventListener('app-theme-changed', (e) => {
@@ -40,9 +32,11 @@ onMounted(() => {
 
 <template>
   <NConfigProvider :theme="theme">
-    <NMessageProvider>
-      <Dashboard />
-    </NMessageProvider>
+    <NDialogProvider>
+      <NMessageProvider>
+        <Dashboard />
+      </NMessageProvider>
+    </NDialogProvider>
   </NConfigProvider>
 </template>
 

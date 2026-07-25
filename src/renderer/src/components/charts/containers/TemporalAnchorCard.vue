@@ -29,10 +29,17 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { NCard, NButton, NIcon, NSpin, NAlert } from 'naive-ui'
 import { RefreshOutline } from '@vicons/ionicons5'
 import DistributionBar from '../base/DistributionBar.vue'
+
+const props = defineProps({
+  refreshKey: {
+    type: Number,
+    default: 0
+  }
+})
 
 const loading = ref(false)
 const error = ref(null)
@@ -58,7 +65,7 @@ async function fetchData() {
   try {
     const result = await window.electron.ipcRenderer.invoke(
       'tool-execute',
-      'sql_analysis',
+      'insight_analyst',
       {
         analysisType: 'temporal_stats'
       }
@@ -86,6 +93,13 @@ function refresh() {
 onMounted(() => {
   fetchData()
 })
+
+watch(
+  () => props.refreshKey,
+  () => {
+    fetchData()
+  }
+)
 </script>
 
 <style scoped>

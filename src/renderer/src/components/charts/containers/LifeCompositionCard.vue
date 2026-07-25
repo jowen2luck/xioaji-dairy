@@ -22,9 +22,16 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { InformationCircleOutline as InfoIcon } from '@vicons/ionicons5'
 import RoseChart from '../base/RoseChart.vue'
+
+const props = defineProps({
+  refreshKey: {
+    type: Number,
+    default: 0
+  }
+})
 
 const loading = ref(false)
 const error = ref(null)
@@ -36,7 +43,7 @@ const fetchData = async () => {
   
   try {
     // 调用后端 IPC
-    const response = await window.electron.ipcRenderer.invoke('tool-execute', 'sql_analysis', {
+    const response = await window.electron.ipcRenderer.invoke('tool-execute', 'insight_analyst', {
       analysisType: 'life_composition'
     })
     
@@ -59,6 +66,13 @@ const fetchData = async () => {
 onMounted(() => {
   fetchData()
 })
+
+watch(
+  () => props.refreshKey,
+  () => {
+    fetchData()
+  }
+)
 </script>
 
 <style scoped>

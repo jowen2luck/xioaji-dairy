@@ -9,13 +9,25 @@
         <!-- 智能体配置 -->
         <n-tab-pane name="assistant" tab="智能助手">
           <n-form label-placement="top" label-width="auto">
-            <n-form-item label="推理点 Base URL">
+            <n-form-item label="智能助手 Base URL">
               <n-select v-model:value="assistantConfig.selectedBaseURL" :options="baseURLOptions" />
             </n-form-item>
             
-            <n-form-item label="模型">
+            <n-form-item label="智能助手模型">
               <n-select v-model:value="assistantConfig.selectedModel" :options="currentModels" />
             </n-form-item>
+
+            <n-divider dashed>后台增强 (ETL) 设置</n-divider>
+
+            <n-form-item label="增量处理 Base URL">
+              <n-select v-model:value="assistantConfig.etlBaseURL" :options="baseURLOptions" />
+            </n-form-item>
+            
+            <n-form-item label="增量处理模型">
+              <n-select v-model:value="assistantConfig.etlModel" :options="currentEtlModels" />
+            </n-form-item>
+
+            <n-divider dashed>系统设置</n-divider>
             
             <n-form-item label="系统提示词">
               <n-input 
@@ -109,7 +121,7 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 import { loadConfig, saveConfig, DEFAULT_CONFIG } from '../config/assistant'
-import { loadChartsConfig, saveChartsConfig } from '../config/chartsConfig'
+import { loadChartsConfig, saveChartsConfig, getDefaultChartsConfig } from '../config/chartsConfig'
 
 const props = defineProps({
   visible: {
@@ -130,6 +142,8 @@ const loadedConfig = loadConfig()
 const assistantConfig = ref({
   selectedBaseURL: loadedConfig.selectedBaseURL,
   selectedModel: loadedConfig.selectedModel,
+  etlBaseURL: loadedConfig.etl.baseURL,
+  etlModel: loadedConfig.etl.model,
   systemPrompt: loadedConfig.prompts.chatSystem,
   temperature: loadedConfig.temperature,
   top_p: loadedConfig.top_p,
@@ -163,10 +177,20 @@ const currentModels = computed(() => {
   }))
 })
 
+// ETL 当前可用模型
+const currentEtlModels = computed(() => {
+  const urls = DEFAULT_CONFIG.baseURLs || []
+  const selectedEntry = urls.find(entry => entry.url === assistantConfig.value.etlBaseURL)
+  return (selectedEntry?.models || []).map(model => ({
+    label: model,
+    value: model
+  }))
+})
+
 // 保存设置
 const saveSettings = () => {
   // 保存智能体配置
-  saveConfig({
+  const partialConfig = {
     selectedBaseURL: assistantConfig.value.selectedBaseURL,
     selectedModel: assistantConfig.value.selectedModel,
     temperature: assistantConfig.value.temperature,
@@ -174,8 +198,20 @@ const saveSettings = () => {
     enabledTools: assistantConfig.value.enabledTools,
     prompts: {
       chatSystem: assistantConfig.value.systemPrompt
+    },
+    etl: {
+      ...loadedConfig.etl,
+      baseURL: assistantConfig.value.etlBaseURL,
+      model: assistantConfig.value.etlModel
     }
-  })
+  }
+  
+  saveConfig(partialConfig)
+
+  // ETL 配置变更时，通知主进程重置 enricher 实例，确保下次使用新模型
+  if (window.electron?.ipcRenderer) {
+    window.electron.ipcRenderer.invoke('etl:reset-instance').catch(() => {})
+  }
 
   // 保存图表配置到 localStorage
   saveChartsConfig(chartsConfig.value)
@@ -197,15 +233,15 @@ const resetToDefault = () => {
     assistantConfig.value = {
       selectedBaseURL: DEFAULT_CONFIG.selectedBaseURL,
       selectedModel: DEFAULT_CONFIG.selectedModel,
+      etlBaseURL: DEFAULT_CONFIG.etl.baseURL,
+      etlModel: DEFAULT_CONFIG.etl.model,
       systemPrompt: DEFAULT_CONFIG.prompts.chatSystem,
       temperature: DEFAULT_CONFIG.temperature,
       top_p: DEFAULT_CONFIG.top_p,
       enabledTools: [...DEFAULT_CONFIG.enabledTools]
     }
     // 重新加载默认图表配置
-    chartsConfig.value = loadChartsConfig()
-    // 清除 localStorage
-    localStorage.removeItem('charts-config')
+    chartsConfig.value = getDefaultChartsConfig()
   }
 }
 </script>
