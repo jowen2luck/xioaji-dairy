@@ -60,7 +60,15 @@ const assistantAPI = {
   // Core Memory API (常驻画像与长期记忆)
   coreMemory: {
     get: () => ipcRenderer.invoke('core-memory:get'),
-    update: (section, content) => ipcRenderer.invoke('core-memory:update', { section, content })
+    update: (section, content) => ipcRenderer.invoke('core-memory:update', { section, content }),
+    listEpisodic: () => ipcRenderer.invoke('core-memory:list-episodic'),
+    invalidateEpisodic: (id, reason) => ipcRenderer.invoke('core-memory:invalidate-episodic', { id, reason }),
+    editEpisodic: (id, content) => ipcRenderer.invoke('core-memory:edit-episodic', { id, content }),
+    onEvolved: (handler) => {
+      const listener = (_event, payload) => handler(payload)
+      ipcRenderer.on('agent:memory-evolved', listener)
+      return () => ipcRenderer.removeListener('agent:memory-evolved', listener)
+    }
   },
   // Memos API (便签盒管理)
   memos: {

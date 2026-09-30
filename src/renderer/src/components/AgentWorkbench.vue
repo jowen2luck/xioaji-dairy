@@ -33,6 +33,22 @@
                 </n-tooltip>
                 <n-tooltip trigger="hover">
                   <template #trigger>
+                    <n-badge :value="episodicMemoriesCount" :max="99" :show="episodicMemoriesCount > 0" type="info">
+                      <n-button 
+                        quaternary 
+                        circle 
+                        size="small" 
+                        aria-label="小鸡认知画布" 
+                        @click="openMemoryDrawer"
+                      >
+                        <template #icon><n-icon size="16"><BrainIcon /></n-icon></template>
+                      </n-button>
+                    </n-badge>
+                  </template>
+                  小鸡认知画布 ({{ episodicMemoriesCount }} 条长效记忆)
+                </n-tooltip>
+                <n-tooltip trigger="hover">
+                  <template #trigger>
                     <n-button quaternary circle size="small" aria-label="记一笔" @click="openCreateDrawer">
                       <template #icon><n-icon size="16"><PlusIcon /></n-icon></template>
                     </n-button>
@@ -208,35 +224,6 @@
             </div>
           </div>
           <template #footer>
-            <!-- 今日生活便签切片流 (让用户与小鸡随时感知今日日记连续性) -->
-            <div v-if="todayActiveMemos.length > 0" class="today-memos-bar">
-              <div class="today-memos-bar-header">
-                <span class="bar-title">🌱 今日生活切片 ({{ todayActiveMemos.length }}条待归档)</span>
-                <div class="bar-actions">
-                  <n-button text size="tiny" type="primary" @click="mergeActiveMemos" :loading="isMergingMemos">
-                    整理合并为日记
-                  </n-button>
-                  <span class="bar-divider">·</span>
-                  <n-button text size="tiny" @click="openMemoDrawer">
-                    便签盒 ›
-                  </n-button>
-                </div>
-              </div>
-              <div class="today-memos-chips">
-                <div 
-                  v-for="memo in todayActiveMemos" 
-                  :key="memo.id" 
-                  class="today-memo-chip"
-                  @click="openMemoDrawer"
-                  :title="`${memo.topic}：${memo.content}`"
-                >
-                  <span class="chip-tag">{{ memo.project || '生活' }}</span>
-                  <span class="chip-topic">{{ memo.topic }}</span>
-                  <span class="chip-preview">{{ memo.content }}</span>
-                </div>
-              </div>
-            </div>
-
             <div class="chat-input-wrapper">
               <n-input
                 v-model:value="input"
@@ -439,6 +426,13 @@
         </div>
       </n-drawer-content>
     </n-drawer>
+
+    <!-- 小鸡心智与认知画布抽屉 -->
+    <CognitiveCanvasDrawer
+      v-model="showMemoryDrawer"
+      ref="memoryDrawerRef"
+      @memory-changed="updateMemoryCount"
+    />
   </div>
 </template>
 
@@ -449,6 +443,7 @@ import { loadConfig, saveConfig, DEFAULT_CONFIG } from '@renderer/config/assista
 import ReActPanel from './ReActPanel.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import JournalEditorDrawer from './journal/JournalEditorDrawer.vue'
+import CognitiveCanvasDrawer from './CognitiveCanvasDrawer.vue'
 import logoImg from '../assets/logo.png'
 
 const message = useMessage()
@@ -530,6 +525,26 @@ const TrashIcon = { render: () => h('svg', { xmlns: 'http://www.w3.org/2000/svg'
 const BookmarkIcon = { render: () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', innerHTML: '<path fill="currentColor" d="M17 3H7c-1.1 0-2 .9-2 2v16l7-3l7 3V5c0-1.1-.9-2-2-2z"/>' }) }
 const CheckmarkIcon = { render: () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', innerHTML: '<path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>' }) }
 const CloseIcon = { render: () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', innerHTML: '<path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>' }) }
+
+// 小鸡认知画布状态
+const showMemoryDrawer = ref(false)
+const memoryDrawerRef = ref(null)
+const episodicMemoriesCount = ref(0)
+let unsubscribeMemoryEvolved = null
+
+const updateMemoryCount = async () => {
+  try {
+    if (window.assistant?.coreMemory?.listEpisodic) {
+      const list = await window.assistant.coreMemory.listEpisodic()
+      episodicMemoriesCount.value = Array.isArray(list) ? list.length : 0
+    }
+  } catch {}
+}
+
+const openMemoryDrawer = () => {
+  showMemoryDrawer.value = true
+  memoryDrawerRef.value?.loadMemories()
+}
 
 const messages = ref([])
 const input = ref('')
@@ -927,6 +942,16 @@ onMounted(async () => {
   // 监听设置更新事件与跨组件数据更新事件
   window.addEventListener('settings-updated', handleSettingsUpdate)
   window.addEventListener('journal-data-updated', handleExternalJournalUpdate)
+
+  // 初始化小鸡长效记忆数量与自进化事件监听
+  updateMemoryCount()
+  if (typeof window.assistant?.coreMemory?.onEvolved === 'function') {
+    unsubscribeMemoryEvolved = window.assistant.coreMemory.onEvolved((payload) => {
+      const fact = payload?.memory?.content || '新的生活认知'
+      message.info(`🌱 小鸡记住了：${fact}`, { duration: 4500 })
+      updateMemoryCount()
+    })
+  }
   if (typeof window.assistant?.onEvent === 'function') {
     unsubscribeAssistantEvents = window.assistant.onEvent(async (payload) => {
       const reqId = currentRequestId.value
@@ -1110,6 +1135,11 @@ onUnmounted(() => {
       unsubscribeAssistantEvents()
     }
   } catch {}
+  try {
+    if (typeof unsubscribeMemoryEvolved === 'function') {
+      unsubscribeMemoryEvolved()
+    }
+  } catch {}
 })
 
 const formatTime = (t) => {
@@ -1170,15 +1200,25 @@ async function send() {
       timestamp: new Date().toISOString()
     })
     
-    const nowStr = new Date().toLocaleString('zh-CN', { hour12: false })
-    const sysinfo = `\n【系统信息】当前时间：${nowStr}；时区：UTC+8；语言：中文。`
+    const now = new Date()
+    const nowStr = now.toLocaleString('zh-CN', { hour12: false })
+    const hour = now.getHours()
+    let period = '下午'
+    if (hour >= 5 && hour < 9) period = '早晨'
+    else if (hour >= 9 && hour < 12) period = '上午'
+    else if (hour >= 12 && hour < 14) period = '中午'
+    else if (hour >= 14 && hour < 18) period = '下午'
+    else if (hour >= 18 && hour < 22) period = '傍晚'
+    else period = '深夜'
+
+    const sysinfo = `\n【系统信息】当前时间：${nowStr} (${period})；时区：UTC+8；语言：中文。\n【特别提醒】：当前所处时段为【${period}】，严禁时空混淆，白天切勿当成夜晚！`
     
     // 构建完整的消息历史，包括之前的对话
     const messagesPayload = [
       { role: 'system', content: `${config.prompts.chatSystem}${sysinfo}` }
     ]
     
-    // 添加历史消息（严格过滤报错消息与脏数据，防止上下文雪崩污染）
+    // 添加消息记录（包含刚加入 messages.value 的当前最新提问）
     messages.value.forEach(msg => {
       if (!msg.content || typeof msg.content !== 'string') return
       const trimmed = msg.content.trim()
@@ -1187,14 +1227,9 @@ async function send() {
       }
       messagesPayload.push({
         role: msg.sender === 'user' ? 'user' : 'assistant',
-        content: msg.content
+        content: msg.content,
+        time: msg.time
       })
-    })
-    
-    // 添加当前消息
-    messagesPayload.push({
-      role: 'user',
-      content: text
     })
     
     console.log('[AgentWorkbench] Sending message history with', messagesPayload.length, 'messages')

@@ -1,13 +1,15 @@
 /**
- * CoreMemoryManager - 常驻画像与长期虚拟内存管理器 (Letta 范式)
+ * CoreMemoryManager - 常驻画像与长期虚拟内存管理器 (Letta 范式 + SQLite 强化)
  * 职责：
  * 1. 维护跨会话常驻的用户身份、人际网络、当前重心与沟通偏好
- * 2. 生成紧凑格式常驻于 System Prompt
- * 3. 支持 Agent 通过工具主动迭代沉淀或用户手动维护
+ * 2. 深度集成 SqliteMemoryRepository，享受 WAL 高并发事务与防崩溃保护
+ * 3. 生成紧凑格式常驻于 System Prompt
+ * 4. 支持 Agent 通过工具主动迭代沉淀或用户手动维护，兼顾旧版 JSON 快照兼容
  */
 
 import fs from 'fs'
 import path from 'path'
+import { SqliteMemoryRepository } from '../../infrastructure/persistence/SqliteMemoryRepository.js'
 
 const DEFAULT_CORE_MEMORY = {
   user_profile: '性格偏向 INFP，注重反思与自我探索，富有同理心，表达偏真诚温和。',
@@ -28,10 +30,28 @@ export const VALID_SECTIONS = [
 ]
 
 export class CoreMemoryManager {
-  constructor({ storagePath } = {}) {
+  /**
+   * @param {Object} options
+   * @param {string} [options.storagePath] - 旧版 core-memory.json 路径（用于快照与平滑迁移）
+   * @param {SqliteMemoryRepository} [options.sqliteRepo] - 底层 SQLite 仓储
+   */
+  constructor({ storagePath = '', sqliteRepo = null } = {}) {
     this.storagePath = storagePath || ''
+    this.sqliteRepo = sqliteRepo || null
     this.memory = { ...DEFAULT_CORE_MEMORY }
-    if (this.storagePath) {
+
+    // 若未显式传入 sqliteRepo 且 storagePath 属于正式数据目录，则自动挂载 SQLite 仓储
+    if (!this.sqliteRepo && (!this.storagePath || this.storagePath.includes('userData'))) {
+      try {
+        this.sqliteRepo = new SqliteMemoryRepository({ legacyJsonPath: this.storagePath })
+      } catch (e) {
+        console.warn('[CoreMemoryManager] SQLite binding unavailable, falling back to JSON:', e.message)
+      }
+    }
+
+    if (this.sqliteRepo) {
+      this.memory = this.sqliteRepo.getProfile()
+    } else if (this.storagePath) {
       this._load()
     }
   }
@@ -55,7 +75,7 @@ export class CoreMemoryManager {
         }
       }
     } catch (e) {
-      console.error('[CoreMemoryManager] Failed to load core memory:', e)
+      console.error('[CoreMemoryManager] Failed to load core memory from file:', e)
     }
 
     this._save()
@@ -70,11 +90,21 @@ export class CoreMemoryManager {
       }
       fs.writeFileSync(this.storagePath, JSON.stringify(this.memory, null, 2), 'utf-8')
     } catch (e) {
-      console.error('[CoreMemoryManager] Failed to save core memory:', e)
+      console.error('[CoreMemoryManager] Failed to save core memory to file:', e)
     }
   }
 
+  getRepo() {
+    if (!this.sqliteRepo) {
+      this.sqliteRepo = new SqliteMemoryRepository({ legacyJsonPath: this.storagePath })
+    }
+    return this.sqliteRepo
+  }
+
   getMemory() {
+    if (this.sqliteRepo) {
+      this.memory = this.sqliteRepo.getProfile()
+    }
     const user = this.memory.user || this.memory.user_profile || ''
     const agent = this.memory.agent || this.memory.preferences || ''
     return {
@@ -105,11 +135,25 @@ export class CoreMemoryManager {
       this.memory.agent = trimmed
     }
 
+    // 持久化到 SQLite 仓储
+    if (this.sqliteRepo) {
+      try {
+        this.sqliteRepo.updateProfile(section, trimmed)
+      } catch (err) {
+        console.warn('[CoreMemoryManager] Failed to update profile in SQLite:', err.message)
+      }
+    }
+
+    // 兼顾 JSON 本地文件落盘
     this._save()
     return true
   }
 
   getPromptBlock() {
+    if (this.sqliteRepo) {
+      return this.sqliteRepo.getPromptBlock()
+    }
+
     const userText = this.memory.user_profile || this.memory.user || ''
     const keyEntitiesText = this.memory.key_entities || ''
     const focusText = this.memory.current_focus || ''

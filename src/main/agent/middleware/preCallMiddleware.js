@@ -22,6 +22,47 @@ const DEFAULT_TIMEZONE = 'Asia/Shanghai'
 const SURPRISE_COOLDOWN_MS = 3 * 24 * 60 * 60 * 1000 // 3 天冷却锁 (72 小时)
 const RECALL_PATTERNS = /又|老是|再次|经常|总是|还是老样子|反复|总是这样|心慌|失眠|崩溃|好累|好烦|压力好大|喘不过气/
 
+export function getTimePeriodInfo(baseDate = null) {
+  const d = baseDate ? dayjs(baseDate).tz(DEFAULT_TIMEZONE) : dayjs().tz(DEFAULT_TIMEZONE)
+  const hour = d.hour()
+  let period = ''
+  let periodNotice = ''
+
+  if (hour >= 5 && hour < 9) {
+    period = '早晨/清晨'
+    periodNotice = '新的一天刚刚开启，朝气蓬勃。'
+  } else if (hour >= 9 && hour < 12) {
+    period = '上午'
+    periodNotice = '白天的黄金工作与专注学习时段。'
+  } else if (hour >= 12 && hour < 14) {
+    period = '中午'
+    periodNotice = '午餐与午间小憩时段。'
+  } else if (hour >= 14 && hour < 18) {
+    period = '下午'
+    periodNotice = '白天的延续活跃时段，距离傍晚/夜间还有数小时，属于白天行动与调整的充裕期（绝不是晚上，切勿当成一天结束！）。'
+  } else if (hour >= 18 && hour < 22) {
+    period = '傍晚/晚间'
+    periodNotice = '晚餐后放松、复盘或夜间个人时光。'
+  } else {
+    period = '深夜/凌晨'
+    periodNotice = '夜深人静，属于休息就寝或静夜思考时段。'
+  }
+
+  const timeStr = d.format('YYYY-MM-DD HH:mm:ss')
+  const weekday = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.day()]
+
+  return {
+    date: d.format('YYYY-MM-DD'),
+    time: d.format('HH:mm:ss'),
+    datetime: timeStr,
+    weekday,
+    hour,
+    period,
+    periodNotice,
+    display: `${timeStr} (${weekday} · ${period})`
+  }
+}
+
 export class PreCallMiddleware {
   constructor({ searchTool, storagePath } = {}) {
     this.calendarTool = new CalendarResolverTool()
@@ -78,10 +119,8 @@ export class PreCallMiddleware {
    * 生成当前动态时间锚点
    */
   getTemporalAnchors(baseDate = null) {
+    const timeInfo = getTimePeriodInfo(baseDate)
     const now = baseDate ? dayjs(baseDate).tz(DEFAULT_TIMEZONE) : dayjs().tz(DEFAULT_TIMEZONE)
-
-    const todayStr = now.format('YYYY-MM-DD')
-    const weekdayName = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][now.day()]
 
     const thisWeekStart = now.startOf('isoWeek').format('YYYY-MM-DD')
     const thisWeekEnd = now.endOf('isoWeek').format('YYYY-MM-DD')
@@ -97,13 +136,21 @@ export class PreCallMiddleware {
     const lastMonthStart = lastMonth.startOf('month').format('YYYY-MM-DD')
     const lastMonthEnd = lastMonth.endOf('month').format('YYYY-MM-DD')
 
+    const isDaytime = timeInfo.hour >= 5 && timeInfo.hour < 18
+
     return `
-【当前时间锚点】(时区: Asia/Shanghai)
-- 今天: ${todayStr} (${weekdayName})
-- 本周范围: ${thisWeekStart} 至 ${thisWeekEnd}
-- 上周范围: ${lastWeekStart} 至 ${lastWeekEnd}
-- 本月范围: ${thisMonthStart} 至 ${thisMonthEnd}
-- 上月范围: ${lastMonthStart} 至 ${lastMonthEnd}
+【当前时间锚点】(系统现实时间感知铁律 - 时区: Asia/Shanghai)
+- 当前准确系统时间: ${timeInfo.display}
+- 当前钟表时段: 【${timeInfo.period}】（${timeInfo.periodNotice}）
+- 【时段感知硬性红线】：
+  1. 必须精准感知当前时段。当前处于【${timeInfo.period}】，严禁时空错乱！严禁在白天（上午/中午/下午）把时间说成“今晚”、“夜里”或以为“一天结束了”！
+  2. ${isDaytime ? `当前正值白天！严禁对用户说“今晚早点睡吧”、“今天就先睡吧”等逃避白天的劝睡话术；当用户在白天表达无力、抗拒或询问“白天我要做点什么”时，必须立足于当前【${timeInfo.period}】时段，给出当下的微小行动支持（如先喝杯温水、洗把脸、出门散步10分钟、做最微小的第一步），绝不可直接快进到晚上入睡！` : `当前正值夜间，适合回顾整理与放松，可温和陪伴并适时引导就寝。`}
+- 统计参考基准范围:
+  - 今天: ${timeInfo.date} (${timeInfo.weekday})
+  - 本周范围: ${thisWeekStart} 至 ${thisWeekEnd}
+  - 上周范围: ${lastWeekStart} 至 ${lastWeekEnd}
+  - 本月范围: ${thisMonthStart} 至 ${thisMonthEnd}
+  - 上月范围: ${lastMonthStart} 至 ${lastMonthEnd}
 `.trim()
   }
 
@@ -259,8 +306,8 @@ export class PreCallMiddleware {
   async process({ userQuery, messages } = {}) {
     const isCasual = this.isCasualGreeting(userQuery)
     const temporalInfo = this.preResolveTemporal(userQuery)
-    const now = dayjs().tz(DEFAULT_TIMEZONE)
-    const timeAnchor = `${now.format('YYYY-MM-DD HH:mm:ss')} (${['周日', '周一', '周二', '周三', '周四', '周五', '周六'][now.day()]})`
+    const timeInfo = getTimePeriodInfo()
+    const timeAnchor = timeInfo.display
 
     let proactiveRecallHint = null
     if (!isCasual) {
@@ -270,6 +317,7 @@ export class PreCallMiddleware {
     return {
       isCasual,
       timeAnchor,
+      timeInfo,
       resolvedTime: temporalInfo.hasTemporal ? temporalInfo.range : null,
       temporalInfo,
       proactiveRecallHint

@@ -2,6 +2,21 @@ import { app, BrowserWindow, ipcMain, dialog, Menu } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import { join } from 'node:path'
+
+// 确保无论打包为安装包（应用名：小鸡日记）还是处于开发模式（daily_log_vue），
+// 用户数据均统一指向现有的 daily_log_vue 目录，实现历史日记、向量数据库与会话记录无缝直连
+try {
+  const appData = app.getPath('appData')
+  const unifiedUserData = path.join(appData, 'daily_log_vue')
+  if (!fs.existsSync(unifiedUserData)) {
+    fs.mkdirSync(unifiedUserData, { recursive: true })
+  }
+  app.setPath('userData', unifiedUserData)
+  console.log(`[Main] Unified userData path locked to: ${unifiedUserData}`)
+} catch (e) {
+  console.warn('[Main] Warning setting unified userData path:', e.message)
+}
+
 import { importExcelToJson, exportJsonToFile } from '../utils/diary-plugin/index.js'
 
 // LangChain 1.0 集成
@@ -34,9 +49,27 @@ process.env.VITE_PUBLIC = process.env.VITE_DEV_SERVER_URL
   ? path.join(process.env.DIST_ELECTRON, '../public')
   : process.env.DIST
 
-// 加载环境变量（配置 override: true，确保优先使用项目内最新 .env 配置，防止被系统旧残留环境变量覆盖）
-const envPath = path.resolve(process.cwd(), '.env')
-require('dotenv').config({ path: envPath, override: true })
+// 加载环境变量：多路径探测，优先读取用户数据漫游目录（%APPDATA%\daily_log_vue\.env），其次程序安装目录与工作目录
+const dotenv = require('dotenv')
+const candidateEnvPaths = [
+  path.join(app.getPath('userData'), '.env'),             // 1. 用户数据目录（升级不丢失，最安全推荐）
+  path.join(path.dirname(app.getPath('exe')), '.env'),    // 2. 程序安装目录 / 便携版运行目录
+  path.resolve(process.cwd(), '.env'),                    // 3. 项目开发工作目录
+  path.join(process.resourcesPath || '', '.env')          // 4. 打包资源目录
+].filter(Boolean)
+
+let loadedEnv = false
+for (const envCandidate of candidateEnvPaths) {
+  if (fs.existsSync(envCandidate)) {
+    dotenv.config({ path: envCandidate, override: true })
+    console.log(`[Main] Successfully loaded .env from: ${envCandidate}`)
+    loadedEnv = true
+    break
+  }
+}
+if (!loadedEnv) {
+  console.warn('[Main] Notice: No .env file found in candidate paths. LLM features may require API Keys.')
+}
 
 // 删除或注释原有的 VITE_DEV_SERVER_URL 判断逻辑
 // if (process.env.VITE_DEV_SERVER_URL) {
@@ -124,6 +157,8 @@ async function createWindow() {
     icon: iconPath,
     width: 1400,
     height: 900,
+    show: false, // 初始隐藏窗口，避免出现未完成渲染的白屏
+    backgroundColor: '#f8fafc', // 设置柔和底色，杜绝纯白刺眼闪烁
     autoHideMenuBar: true,
     webPreferences: {
       preload,
@@ -134,6 +169,24 @@ async function createWindow() {
       webSecurity: false,
       webviewTag: true,
     },
+  })
+
+  // 优雅展示窗口：等渲染进程完成初次绘制并准备好之后再呈现
+  win.once('ready-to-show', () => {
+    if (win && !win.isDestroyed()) {
+      win.show()
+    }
+  })
+
+  // 兜底保障：若因为偶发异常 4 秒内仍未触发 ready-to-show，强制呈现窗口
+  const showTimeout = setTimeout(() => {
+    if (win && !win.isDestroyed() && !win.isVisible()) {
+      win.show()
+    }
+  }, 4000)
+
+  win.on('closed', () => {
+    clearTimeout(showTimeout)
   })
 
   // 彻底移除顶部原生菜单功能栏
@@ -188,7 +241,7 @@ app.whenReady().then(() => {
   registerNewIPCHandlers()
   createWindow()
 
-  // 后台静默预热：非阻塞加载本地向量库与模型
+  // 后台静默预热：延后到 6 秒，避开前端首屏挂载与编译的黄金资源期
   setTimeout(async () => {
     try {
       const { initVectorSearch } = await import('./tools/index.js')
@@ -198,7 +251,31 @@ app.whenReady().then(() => {
     } catch (e) {
       console.warn('[VectorDB] Background warm-up notice:', e.message)
     }
-  }, 1500)
+  }, 6000)
+})
+
+let isAppQuitting = false
+app.on('before-quit', async (event) => {
+  if (isAppQuitting) return
+  isAppQuitting = true
+  event.preventDefault()
+  console.log('[Main] before-quit intercepted: flushing memory reflector and finalizing database...')
+
+  try {
+    const { getBackgroundMemoryReflector } = await import('./agent/memory/BackgroundMemoryReflector.js')
+    await getBackgroundMemoryReflector().flushPending()
+  } catch (refErr) {
+    console.warn('[Main] Warning during memory reflector flush on quit:', refErr.message)
+  }
+
+  try {
+    const { getDatabaseManager } = await import('./infrastructure/db/DatabaseManager.js')
+    getDatabaseManager().close()
+  } catch (dbErr) {
+    console.warn('[Main] Warning during database close on quit:', dbErr.message)
+  }
+
+  app.quit()
 })
 
 app.on('window-all-closed', () => {

@@ -123,6 +123,53 @@
             </n-form-item>
           </n-form>
         </n-tab-pane>
+
+        <!-- 外观设置 -->
+        <n-tab-pane name="appearance" tab="外观">
+          <n-form label-placement="top" label-width="auto">
+            <!-- 主题 -->
+            <n-form-item label="主题">
+              <n-space align="center">
+                <n-switch v-model:value="appearanceConfig.isDark" size="medium" @update:value="onThemeToggle">
+                  <template #checked>🌙 深色</template>
+                  <template #unchecked>☀️ 浅色</template>
+                </n-switch>
+              </n-space>
+            </n-form-item>
+
+            <n-divider dashed />
+
+            <!-- 界面缩放 -->
+            <n-form-item label="界面缩放">
+              <n-space vertical style="width: 100%">
+                <n-space justify="space-between" style="width: 100%">
+                  <span style="font-size: 13px; color: var(--text-muted, #8A7A6A)">
+                    拖动滑块调整整个界面的显示大小
+                  </span>
+                  <n-tag size="small" type="info">{{ Math.round(appearanceConfig.zoom * 100) }}%</n-tag>
+                </n-space>
+                <n-slider
+                  v-model:value="appearanceConfig.zoom"
+                  :min="ZOOM_MIN"
+                  :max="ZOOM_MAX"
+                  :step="ZOOM_STEP"
+                  :format-tooltip="v => Math.round(v * 100) + '%'"
+                  style="width: 100%"
+                />
+                <n-space>
+                  <n-button size="small" quaternary @click="applyZoomPreview(0.8)">80%</n-button>
+                  <n-button size="small" quaternary @click="applyZoomPreview(0.9)">90%</n-button>
+                  <n-button size="small" quaternary @click="applyZoomPreview(1.0)">100%</n-button>
+                  <n-button size="small" quaternary @click="applyZoomPreview(1.1)">110%</n-button>
+                  <n-button size="small" quaternary @click="applyZoomPreview(1.2)">120%</n-button>
+                </n-space>
+                <n-alert type="info" :show-icon="false" style="font-size: 12px; margin-top: 4px">
+                  缩放仅影响界面显示，不影响内容数据。保存后生效并持久化。
+                </n-alert>
+              </n-space>
+            </n-form-item>
+          </n-form>
+        </n-tab-pane>
       </n-tabs>
       
       <template #footer>
@@ -148,6 +195,8 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { loadConfig, saveConfig, DEFAULT_CONFIG } from '../config/assistant'
 import { loadChartsConfig, saveChartsConfig, getDefaultChartsConfig } from '../config/chartsConfig'
+import { setTheme, getCurrentTheme } from '../utils/theme.js'
+import { setZoom, getZoom, applyZoom, resetZoom, ZOOM_MIN, ZOOM_MAX, ZOOM_STEP, ZOOM_DEFAULT } from '../utils/zoom.js'
 
 const props = defineProps({
   visible: {
@@ -178,6 +227,30 @@ const assistantConfig = ref({
 
 // 图表配置
 const chartsConfig = ref(loadChartsConfig())
+
+// 外观配置（主题 + 界面缩放）
+const appearanceConfig = ref({
+  isDark: getCurrentTheme() === 'dark',
+  zoom: getZoom()
+})
+
+// 主题切换（实时预览，不等保存）
+const onThemeToggle = (val) => {
+  const newTheme = val ? 'dark' : 'light'
+  setTheme(newTheme)
+  window.dispatchEvent(new CustomEvent('app-theme-changed', { detail: { theme: newTheme } }))
+}
+
+// 缩放快捷按钮（实时预览）
+const applyZoomPreview = (scale) => {
+  appearanceConfig.value.zoom = scale
+  applyZoom(scale)
+}
+
+// 滑块实时预览缩放
+watch(() => appearanceConfig.value.zoom, (val) => {
+  applyZoom(val)
+})
 
 // 长期记忆 (Core Memory) 状态
 const coreMemoryData = ref({
@@ -213,6 +286,11 @@ const refreshConfig = () => {
     enabledTools: [...freshConfig.enabledTools]
   }
   chartsConfig.value = loadChartsConfig()
+  // 同步外观配置
+  appearanceConfig.value = {
+    isDark: getCurrentTheme() === 'dark',
+    zoom: getZoom()
+  }
   loadCoreMemory()
 }
 
@@ -311,6 +389,9 @@ const saveSettings = async () => {
   // 保存图表配置到 localStorage
   saveChartsConfig(chartsConfig.value)
 
+  // 保存界面缩放（持久化）
+  setZoom(appearanceConfig.value.zoom)
+
   // 触发全局配置更新事件
   window.dispatchEvent(new CustomEvent('settings-updated', {
     detail: {
@@ -337,6 +418,9 @@ const resetToDefault = async () => {
     }
     // 重新加载默认图表配置
     chartsConfig.value = getDefaultChartsConfig()
+    // 重置界面缩放
+    appearanceConfig.value.zoom = ZOOM_DEFAULT
+    resetZoom()
     await loadCoreMemory()
   }
 }

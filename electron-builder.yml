@@ -10,6 +10,7 @@ files:
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
 asarUnpack:
   - resources/**
+  - node_modules/sqlite-vec*/**
 win:
   executableName: 小鸡日记
 nsis:

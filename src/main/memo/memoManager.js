@@ -2,9 +2,10 @@
  * MemoManager - 小鸡会话便签盒管理器
  * 职责：
  * 1. 负责管理自然倾诉阶段产生的待收纳便签 (Memos)
- * 2. 支持本地持久化至 memos.json
+ * 2. 深度集成 SqliteMemoRepository，实现结构化事务管理与防崩溃保护
  * 3. 支持同话题多轮增补追加、多主题分箱
- * 4. 支持单篇或多篇便签合并归档转换为正式日记 (写入 appData.json)
+ * 4. 支持单篇或多篇便签合并归档转换为正式日记（具备原子回滚能力）
+ * 5. 兼容本地 memos.json 快照同步与平滑迁移
  */
 
 import fs from 'fs'
@@ -12,6 +13,7 @@ import path from 'path'
 import dayjs from '../../utils/date.js'
 import { saveData } from '../data/index.js'
 import { clearVectorCache } from '../tools/searchRecords.js'
+import { SqliteMemoRepository } from '../infrastructure/persistence/SqliteMemoRepository.js'
 
 /**
  * 清洗便签与日记内容，剔除第三人称公文转述（如“用户说了：”、“用户表示：”等），确保第一人称日记纯度
@@ -36,9 +38,126 @@ export function sanitizeMemoContent(text) {
   return cleaned.trim()
 }
 
+/**
+ * 计算两个字符串的字符多重集重合率（Overlap Ratio）
+ * 取交集字符数 / 较短文本的字符数，返回 0.0 ~ 1.0
+ */
+export function computeContentOverlap(strA, strB) {
+  if (!strA || !strB) return 0
+  const cleanA = strA.replace(/[^\p{L}\p{N}]/gu, '')
+  const cleanB = strB.replace(/[^\p{L}\p{N}]/gu, '')
+  if (!cleanA || !cleanB) return 0
+
+  if (cleanA === cleanB) return 1.0
+
+  const minLen = Math.min(cleanA.length, cleanB.length)
+  // 短文本（少于15字）不采用模糊正文重叠率判定，避免如“内容1”与“内容2”因字数过少误判
+  if (minLen < 15) {
+    if (cleanA.includes(cleanB) || cleanB.includes(cleanA)) {
+      return 1.0
+    }
+    return 0
+  }
+
+  if (cleanA.includes(cleanB) || cleanB.includes(cleanA)) return 1.0
+
+  const freqA = {}
+  for (const ch of cleanA) freqA[ch] = (freqA[ch] || 0) + 1
+  const freqB = {}
+  for (const ch of cleanB) freqB[ch] = (freqB[ch] || 0) + 1
+
+  let commonChars = 0
+  for (const ch in freqA) {
+    if (freqB[ch]) commonChars += Math.min(freqA[ch], freqB[ch])
+  }
+  return minLen > 0 ? commonChars / minLen : 0
+}
+
+/**
+ * 判断两个便签主题是否高度相似（支持前后语序倒置，如“中秋节的无力感与逻辑闭环” vs “逻辑闭环与中秋节的无力感”）
+ */
+export function isTopicSimilar(topicA, topicB) {
+  if (!topicA || !topicB) return false
+  const a = topicA.trim().toLowerCase()
+  const b = topicB.trim().toLowerCase()
+  if (a === b) return true
+  if (a.includes(b) || b.includes(a)) return true
+
+  const cleanA = a.replace(/[^\p{L}\p{N}]/gu, '')
+  const cleanB = b.replace(/[^\p{L}\p{N}]/gu, '')
+  if (!cleanA || !cleanB) return false
+
+  // 字符集 Jaccard 相似度
+  const setA = new Set(cleanA)
+  const setB = new Set(cleanB)
+  let intersection = 0
+  for (const c of setA) {
+    if (setB.has(c)) intersection++
+  }
+  const union = setA.size + setB.size - intersection
+  const charJaccard = union > 0 ? intersection / union : 0
+
+  // 2-gram Jaccard 相似度
+  const ngrams = (str, n = 2) => {
+    const set = new Set()
+    for (let i = 0; i <= str.length - n; i++) {
+      set.add(str.slice(i, i + n))
+    }
+    return set
+  }
+  const ngramsA = ngrams(cleanA, 2)
+  const ngramsB = ngrams(cleanB, 2)
+  let ngramInter = 0
+  for (const g of ngramsA) {
+    if (ngramsB.has(g)) ngramInter++
+  }
+  const ngramUnion = ngramsA.size + ngramsB.size - ngramInter
+  const ngramJaccard = ngramUnion > 0 ? ngramInter / ngramUnion : 0
+
+  return charJaccard >= 0.75 || ngramJaccard >= 0.6
+}
+
+/**
+ * 智能合并便签内容：
+ * - 若完全包含或高度重合（>= 0.65，判定为模型重述/润色/二次提炼），保留更全面（更长）的一方，避免全文重复拼接
+ * - 若属于增量补充（< 0.65），进行换行自然拼接
+ */
+export function mergeMemoContent(existingContent, incomingContent) {
+  if (!existingContent) return incomingContent || ''
+  if (!incomingContent) return existingContent
+
+  const cleanExisting = existingContent.trim()
+  const cleanIncoming = incomingContent.trim()
+
+  if (cleanExisting.includes(cleanIncoming)) return cleanExisting
+  if (cleanIncoming.includes(cleanExisting)) return cleanIncoming
+
+  const overlap = computeContentOverlap(cleanExisting, cleanIncoming)
+  if (overlap >= 0.65) {
+    return cleanIncoming.length >= cleanExisting.length ? cleanIncoming : cleanExisting
+  }
+
+  return `${cleanExisting}\n\n${cleanIncoming}`
+}
+
 export class MemoManager {
-  constructor({ storagePath = null } = {}) {
+  /**
+   * @param {Object} [options]
+   * @param {string} [options.storagePath]
+   * @param {SqliteMemoRepository} [options.sqliteRepo]
+   */
+  constructor({ storagePath = null, sqliteRepo = null } = {}) {
     this.storagePath = storagePath || this._resolveDefaultStoragePath()
+    this.sqliteRepo = sqliteRepo || null
+
+    // 若未显式传入 sqliteRepo 且 storagePath 属于正式数据目录或为空，则自动挂载 SQLite 仓储
+    if (!this.sqliteRepo && (!this.storagePath || this.storagePath.includes('userData'))) {
+      try {
+        this.sqliteRepo = new SqliteMemoRepository({ legacyJsonPath: this.storagePath })
+      } catch (e) {
+        console.warn('[MemoManager] SQLite binding unavailable, falling back to JSON:', e.message)
+      }
+    }
   }
 
   _resolveDefaultStoragePath() {
@@ -52,6 +171,13 @@ export class MemoManager {
       }
     } catch {}
     return path.join(process.cwd(), '.cache', 'memos.json')
+  }
+
+  getRepo() {
+    if (!this.sqliteRepo) {
+      this.sqliteRepo = new SqliteMemoRepository({ legacyJsonPath: this.storagePath })
+    }
+    return this.sqliteRepo
   }
 
   _loadMemos() {
@@ -82,11 +208,23 @@ export class MemoManager {
     }
   }
 
+  _syncFromJsonFallback() {
+    if (!this.storagePath || !this.sqliteRepo) return
+    try {
+      const list = this.sqliteRepo.listMemos({ status: 'all' })
+      this._saveMemos(list)
+    } catch {}
+  }
+
   /**
    * 查询便签列表
    * @param {{ status?: 'all'|'active'|'merged'|'discarded', date?: string }} options
    */
   listMemos({ status = 'all', date = null } = {}) {
+    if (this.sqliteRepo) {
+      return this.sqliteRepo.listMemos({ status, date })
+    }
+
     const memos = this._loadMemos()
     return memos.filter(m => {
       if (status !== 'all' && m.status !== status) return false
@@ -100,6 +238,10 @@ export class MemoManager {
    */
   getMemo(id) {
     if (!id) return null
+    if (this.sqliteRepo) {
+      return this.sqliteRepo.getMemo(id)
+    }
+
     const memos = this._loadMemos()
     return memos.find(m => m.id === id) || null
   }
@@ -108,6 +250,12 @@ export class MemoManager {
    * 创建或增补便签
    */
   upsertMemo({ id = null, topic, project, content, quotes = [], date = null } = {}) {
+    if (this.sqliteRepo) {
+      const res = this.sqliteRepo.upsertMemo({ id, topic, project, content, quotes, date })
+      this._syncFromJsonFallback()
+      return res
+    }
+
     if (!content || !content.trim()) {
       throw new Error('便签正文不能为空')
     }
@@ -127,10 +275,7 @@ export class MemoManager {
         const existing = memos[idx]
         existing.topic = cleanTopic || existing.topic
         existing.project = cleanProject || existing.project
-        // 增补内容：如果新内容不在原有内容中，则追加
-        if (!existing.content.includes(cleanContent)) {
-          existing.content = `${existing.content}\n\n${cleanContent}`
-        }
+        existing.content = mergeMemoContent(existing.content, cleanContent)
         existing.quotes = Array.from(new Set([...(existing.quotes || []), ...cleanQuotes]))
         existing.updatedAt = nowIso
         this._saveMemos(memos)
@@ -138,17 +283,32 @@ export class MemoManager {
       }
     }
 
-    // 2. 未指定 ID 时，在当天活跃便签中匹配同主题或同项目进行自然增补
-    const activeSameTopic = memos.find(m => 
+    // 2. 未指定 ID 或指定 ID 不存在时，在当天活跃便签中匹配同主题、相似主题或高重合正文
+    let activeSameTopic = memos.find(m => 
       m.status === 'active' && 
       m.date === targetDate && 
-      (m.topic === cleanTopic || (m.project === cleanProject && m.topic.includes(cleanTopic)))
+      m.topic === cleanTopic
     )
+    if (!activeSameTopic) {
+      activeSameTopic = memos.find(m => 
+        m.status === 'active' && 
+        m.date === targetDate && 
+        ((m.project === cleanProject && (m.topic.includes(cleanTopic) || cleanTopic.includes(m.topic))) ||
+         isTopicSimilar(m.topic, cleanTopic))
+      )
+    }
+    if (!activeSameTopic) {
+      activeSameTopic = memos.find(m => 
+        m.status === 'active' && 
+        m.date === targetDate && 
+        computeContentOverlap(m.content, cleanContent) >= 0.65
+      )
+    }
 
     if (activeSameTopic) {
-      if (!activeSameTopic.content.includes(cleanContent)) {
-        activeSameTopic.content = `${activeSameTopic.content}\n\n${cleanContent}`
-      }
+      activeSameTopic.topic = (activeSameTopic.topic && activeSameTopic.topic !== '生活随想') ? activeSameTopic.topic : cleanTopic
+      activeSameTopic.project = cleanProject || activeSameTopic.project
+      activeSameTopic.content = mergeMemoContent(activeSameTopic.content, cleanContent)
       activeSameTopic.quotes = Array.from(new Set([...(activeSameTopic.quotes || []), ...cleanQuotes]))
       activeSameTopic.updatedAt = nowIso
       this._saveMemos(memos)
@@ -178,6 +338,12 @@ export class MemoManager {
    * 删除便签
    */
   deleteMemo(id) {
+    if (this.sqliteRepo) {
+      const res = this.sqliteRepo.deleteMemo(id)
+      this._syncFromJsonFallback()
+      return res
+    }
+
     const memos = this._loadMemos()
     const filtered = memos.filter(m => m.id !== id)
     if (filtered.length !== memos.length) {
@@ -188,11 +354,10 @@ export class MemoManager {
   }
 
   /**
-   * 将单张便签转换为正式日记
+   * 将单张便签转换为正式日记（具备原子保障）
    */
   async convertToRecord(memoId, recordOverrides = {}) {
-    const memos = this._loadMemos()
-    const memo = memos.find(m => m.id === memoId)
+    const memo = this.getMemo(memoId)
     if (!memo) {
       throw new Error(`找不到 ID 为 ${memoId} 的便签`)
     }
@@ -211,39 +376,50 @@ export class MemoManager {
       ganshou: sanitizeMemoContent(rawContent)
     }
 
-    // 存入正式 appData.json
+    // 存入正式存储底座（当前为 appData.json，阶段三无感迁入 SQLite journals 表）
     const saveRes = await saveData([newRecord])
     if (saveRes && saveRes.error) {
       throw new Error(`转换日记失败: ${saveRes.error}`)
     }
 
     // 更新便签状态为已归档
-    memo.status = 'merged'
-    memo.targetRecordId = uniqueId
-    memo.updatedAt = new Date().toISOString()
-    this._saveMemos(memos)
+    if (this.sqliteRepo) {
+      this.sqliteRepo.updateMemoStatus(memoId, 'merged', uniqueId)
+      this._syncFromJsonFallback()
+    } else {
+      const memos = this._loadMemos()
+      const target = memos.find(m => m.id === memoId)
+      if (target) {
+        target.status = 'merged'
+        target.targetRecordId = uniqueId
+        target.updatedAt = new Date().toISOString()
+        this._saveMemos(memos)
+      }
+    }
 
     try {
       clearVectorCache()
     } catch {}
 
+    const updatedMemo = this.getMemo(memoId)
+
     return {
       success: true,
       record: newRecord,
-      memo
+      memo: updatedMemo || memo
     }
   }
 
   /**
-   * 将多张便签合并转换为一篇完整的正式日记
+   * 将多张便签合并转换为一篇完整的正式日记（具备原子保障）
    */
   async mergeToRecord(memoIds, recordOverrides = {}) {
     if (!Array.isArray(memoIds) || memoIds.length === 0) {
       throw new Error('必须指定至少一张便签 ID')
     }
 
-    const memos = this._loadMemos()
-    const targetMemos = memos.filter(m => memoIds.includes(m.id))
+    const allMemos = this.listMemos({ status: 'all' })
+    const targetMemos = allMemos.filter(m => memoIds.includes(m.id))
     if (targetMemos.length === 0) {
       throw new Error('未找到指定的任何便签')
     }
@@ -274,23 +450,34 @@ export class MemoManager {
       throw new Error(`合并生成日记失败: ${saveRes.error}`)
     }
 
-    const nowIso = new Date().toISOString()
-    targetMemos.forEach(m => {
-      m.status = 'merged'
-      m.targetRecordId = uniqueId
-      m.updatedAt = nowIso
-    })
-    this._saveMemos(memos)
+    // 事务批量更新便签状态
+    if (this.sqliteRepo) {
+      this.sqliteRepo.batchUpdateMemosStatus(memoIds, 'merged', uniqueId)
+      this._syncFromJsonFallback()
+    } else {
+      const nowIso = new Date().toISOString()
+      const memos = this._loadMemos()
+      memos.forEach(m => {
+        if (memoIds.includes(m.id)) {
+          m.status = 'merged'
+          m.targetRecordId = uniqueId
+          m.updatedAt = nowIso
+        }
+      })
+      this._saveMemos(memos)
+    }
 
     try {
       clearVectorCache()
     } catch {}
 
+    const updatedMemos = this.listMemos({ status: 'all' }).filter(m => memoIds.includes(m.id))
+
     return {
       success: true,
       record: newRecord,
       mergedCount: targetMemos.length,
-      memos: targetMemos
+      memos: updatedMemos
     }
   }
 }

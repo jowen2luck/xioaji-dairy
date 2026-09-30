@@ -13,6 +13,7 @@ import path from 'node:path'
 import { app } from 'electron'
 import { LLMEnricher } from '../etl/llmEnricher.js'
 import { enrichRecord, cleanDataForSave } from '../../utils/diary-plugin/index.js'
+import { SqliteJournalRepository } from '../infrastructure/persistence/SqliteJournalRepository.js'
 export { enrichRecord }
 
 // 数据存储路径
@@ -20,22 +21,60 @@ const dataPath = (app && typeof app.getPath === 'function')
   ? path.join(app.getPath('userData'), 'appData.json')
   : path.join(process.env.APPDATA || process.cwd(), 'daily_log_vue', 'appData.json')
 
+let sqliteJournalRepo = null
+
+// 内存短缓存机制（吸收冷启动阶段多组件/多通道对全量数据的并发重复加载与 1843 次重型计算）
+let cachedEnrichedData = null
+let cacheTimestamp = 0
+const CACHE_TTL_MS = 15000 // 15秒缓存
+
+export function invalidateEnrichedDataCache() {
+  cachedEnrichedData = null
+  cacheTimestamp = 0
+}
+
+export function getJournalRepository() {
+  if (!sqliteJournalRepo) {
+    try {
+      sqliteJournalRepo = new SqliteJournalRepository({ legacyJsonPath: dataPath })
+    } catch (e) {
+      console.warn('[DataLoader] SQLite journal repository unavailable:', e.message)
+    }
+  }
+  return sqliteJournalRepo
+}
+
 /**
  * 批量加载并增强数据
- * 核心改进：自动加载并合并 AI 缓存数据
+ * 核心改进：自动优先从 SQLite 加载并合并 AI 缓存数据
  */
-export async function loadAndEnrichData() {
+export async function loadAndEnrichData(force = false) {
+  const now = Date.now()
+  if (!force && cachedEnrichedData && (now - cacheTimestamp < CACHE_TTL_MS)) {
+    return cachedEnrichedData
+  }
+
   try {
-    // 步骤 1: 加载原始 JSON 数据
-    if (!fs.existsSync(dataPath)) {
-      console.log('[DataLoader] No data file found, returning empty array')
+    const repo = getJournalRepository()
+    let rawData = []
+
+    if (repo) {
+      rawData = repo.listJournals({ includeDeleted: false })
+    }
+
+    // 若 SQLite 暂无数据且 JSON 存在，从 JSON 文件读取
+    if (rawData.length === 0 && fs.existsSync(dataPath)) {
+      const jsonData = fs.readFileSync(dataPath, 'utf-8')
+      if (jsonData.length > 0) {
+        rawData = JSON.parse(jsonData)
+      }
+    }
+
+    if (rawData.length === 0) {
+      console.log('[DataLoader] No records found, returning empty array')
       return []
     }
-    
-    const jsonData = fs.readFileSync(dataPath, 'utf-8')
-    if (jsonData.length === 0) return []
-    
-    const rawData = JSON.parse(jsonData)
+
     console.log(`[DataLoader] Loaded ${rawData.length} raw records`)
     
     // 步骤 2: ETL 处理 - 生成 _meta_ 字段
@@ -95,6 +134,10 @@ export async function loadAndEnrichData() {
     })
     console.log(`[DataLoader] Sorted ${enrichedData.length} records by time (descending)`)
     
+    // 写入内存短缓存
+    cachedEnrichedData = enrichedData
+    cacheTimestamp = Date.now()
+
     return enrichedData
   } catch (error) {
     console.error('[DataLoader] Error loading data:', error)
@@ -108,6 +151,15 @@ export async function loadAndEnrichData() {
  */
 export async function saveData(newData) {
   try {
+    const repo = getJournalRepository()
+    if (repo && Array.isArray(newData) && newData.length > 0) {
+      try {
+        repo.saveJournals(newData)
+      } catch (err) {
+        console.warn('[DataLoader] Failed to save to SQLite journals:', err.message)
+      }
+    }
+
     let mergedData = newData
     
     if (fs.existsSync(dataPath)) {
@@ -143,6 +195,7 @@ export async function saveData(newData) {
     const cleanedData = cleanDataForSave(mergedData)
     
     fs.writeFileSync(dataPath, JSON.stringify(cleanedData, null, 2))
+    invalidateEnrichedDataCache()
     console.log(`[DataLoader] Saved ${cleanedData.length} records`)
     
     return { success: true, count: cleanedData.length }
@@ -199,7 +252,18 @@ export async function updateRecord(id, updates, aiMetaUpdates = null) {
     // Step 4: Save raw data back to file
     rawData[recordIndex] = updatedRecord
     fs.writeFileSync(dataPath, JSON.stringify(rawData, null, 2))
+    invalidateEnrichedDataCache()
     console.log(`[DataLoader] Successfully updated raw record ${id}`)
+    
+    // 同步更新至 SQLite journals 表
+    const repo = getJournalRepository()
+    if (repo) {
+      try {
+        repo.updateJournal(id, updates, aiMetaUpdates)
+      } catch (err) {
+        console.warn('[DataLoader] Failed to update SQLite journal:', err.message)
+      }
+    }
     
     // 清除向量索引缓存以保证搜索即时同步
     try {
@@ -274,7 +338,18 @@ export async function deleteRecord(id) {
 
     const deletedRecord = rawData.splice(recordIndex, 1)[0]
     fs.writeFileSync(dataPath, JSON.stringify(rawData, null, 2))
+    invalidateEnrichedDataCache()
     console.log(`[DataLoader] Successfully deleted record ${id}`)
+
+    // 同步自 SQLite journals 表移除
+    const repo = getJournalRepository()
+    if (repo) {
+      try {
+        repo.deleteJournal(id)
+      } catch (err) {
+        console.warn('[DataLoader] Failed to delete from SQLite journals:', err.message)
+      }
+    }
 
     // 清除向量索引缓存以保证搜索即时同步
     try {

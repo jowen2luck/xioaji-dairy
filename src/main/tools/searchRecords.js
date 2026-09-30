@@ -44,13 +44,20 @@ const CHUNKING_CONFIG = {
   adaptiveThreshold: 300 // 自适应阈值：低于 300 字符不切片，整篇作为一个块
 }
 
-// 探测项目内 resources/models 本地目录
+// 探测项目内 resources/models 本地目录（兼容开发与生产打包环境）
 function getLocalModelsDir() {
-  const candidate1 = path.join(process.cwd(), 'resources', 'models')
-  const candidate2 = path.join(__dirname, '..', '..', '..', 'resources', 'models')
-  if (fs.existsSync(candidate1)) return candidate1
-  if (fs.existsSync(candidate2)) return candidate2
-  return candidate1
+  const candidates = [
+    process.resourcesPath ? path.join(process.resourcesPath, 'app.asar.unpacked', 'resources', 'models') : null,
+    process.resourcesPath ? path.join(process.resourcesPath, 'resources', 'models') : null,
+    path.join(process.cwd(), 'resources', 'models'),
+    path.join(__dirname, '..', '..', '..', 'resources', 'models'),
+    path.join(__dirname, '..', '..', 'resources', 'models')
+  ].filter(Boolean)
+
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c
+  }
+  return candidates[0] || path.join(process.cwd(), 'resources', 'models')
 }
 
 // ==================== 向量化与模型加载模块 ====================

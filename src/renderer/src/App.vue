@@ -3,9 +3,12 @@ import Dashboard from './components/Dashboard.vue'
 import { NConfigProvider, NDialogProvider, NMessageProvider, darkTheme } from 'naive-ui'
 import { ref, computed, onMounted } from 'vue'
 import { initTheme, getCurrentTheme, setTheme } from './utils/theme.js'
+import { initZoom } from './utils/zoom.js'
 
 // 初始化主题
 initTheme()
+// 初始化界面缩放
+initZoom()
 
 const currentTheme = ref('light')
 

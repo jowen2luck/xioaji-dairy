@@ -226,5 +226,26 @@ describe('MemoManager and ManageMemoTool', () => {
     expect(prompt).toContain('第一人称日记视角')
     expect(prompt).toContain('数据事实性')
   })
+
+  it('should deduplicate inverted topics and high-overlap content in json fallback', () => {
+    const today = '2026-09-26'
+    const { memo: m1, isNew: isNew1 } = memoManager.upsertMemo({
+      topic: '中秋节的无力感与逻辑闭环',
+      project: '心情',
+      content: '昨天是中秋节，没吃到月饼有些失落。今天原本打算出门，结果下午突然陷入巨大的悲伤，瘫在床上动弹不得。',
+      date: today
+    })
+    expect(isNew1).toBe(true)
+
+    const { memo: m2, isNew: isNew2 } = memoManager.upsertMemo({
+      topic: '逻辑闭环与中秋节的无力感',
+      project: '心情',
+      content: '昨天是中秋节，没吃到月饼有些失落。今天原本打算出门，结果下午突然陷入巨大的悲伤，整个人瘫在床上，连站起来的力气都没有。',
+      date: today
+    })
+    expect(isNew2).toBe(false)
+    expect(m2.id).toBe(m1.id)
+    expect(memoManager.listMemos().length).toBe(1)
+  })
 })
 

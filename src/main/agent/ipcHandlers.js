@@ -21,6 +21,7 @@ import { globalContextCompactor } from './middleware/contextCompactor.js'
 import { getMemoManager } from '../memo/memoManager.js'
 import dayjs from '../../utils/date.js'
 import { bailianPoolManager } from '../llm/bailianPool.js'
+import { getBackgroundMemoryReflector } from './memory/BackgroundMemoryReflector.js'
 
 let sessionManager = null
 let coreMemoryManager = null
@@ -65,9 +66,37 @@ export function registerIPCHandlers(config = {}) {
   ipcMain.handle('sessions:rename', async (_event, { id, title }) => sm.renameSession(id, title))
   ipcMain.handle('sessions:migrate-legacy', async (_event, { messages, reacts }) => sm.migrateLegacyData(messages, reacts))
 
-  // 注册常驻画像内存 IPC
+  // 注册常驻画像与自进化记忆 IPC
   ipcMain.handle('core-memory:get', async () => cm.getMemory())
   ipcMain.handle('core-memory:update', async (_event, { section, content }) => cm.updateSection(section, content))
+  ipcMain.handle('core-memory:list-episodic', async () => {
+    return cm.getRepo().listValidMemories({ limit: 100 })
+  })
+  ipcMain.handle('core-memory:invalidate-episodic', async (_event, { id, reason }) => {
+    return cm.getRepo().invalidateMemory(id, reason || 'user_deleted')
+  })
+  ipcMain.handle('core-memory:edit-episodic', async (_event, { id, content }) => {
+    return cm.getRepo().updateMemoryContent(id, content)
+  })
+
+  // 绑定自进化记忆提炼事件广播
+  try {
+    const reflector = getBackgroundMemoryReflector({ memoryRepo: cm.getRepo() })
+    reflector.onMemoryEvolved((payload) => {
+      try {
+        const { BrowserWindow } = require('electron')
+        BrowserWindow.getAllWindows().forEach((win) => {
+          if (!win.isDestroyed()) {
+            win.webContents.send('agent:memory-evolved', payload)
+          }
+        })
+      } catch (broadcastErr) {
+        console.warn('[IPC] Failed to broadcast memory-evolved:', broadcastErr.message)
+      }
+    })
+  } catch (e) {
+    console.warn('[IPC] Failed to bind memory reflector event listener:', e.message)
+  }
 
   // 注册便签管理 IPC
   const mm = getMemoManager()
@@ -288,7 +317,16 @@ export function registerIPCHandlers(config = {}) {
       }
       const coreMemoryPrompt = cm.renderPrompt()
 
-      const temporalAnchorPrompt = `【系统动态时间锚点】\n- 当前系统时间: ${preCall.timeAnchor}` +
+      const timeInfo = preCall.timeInfo || { display: preCall.timeAnchor, period: '当前时段', periodNotice: '', hour: 12 }
+      const isDaytime = timeInfo.hour >= 5 && timeInfo.hour < 18
+
+      const temporalAnchorPrompt = `【系统动态时间锚点与现实时段感知】(时区: Asia/Shanghai)\n` +
+        `- 当前系统精确时间: ${timeInfo.display}\n` +
+        `- 当前真实时段: 【${timeInfo.period}】（${timeInfo.periodNotice}）\n` +
+        `- 【现实时间感知硬性红线】: ` +
+        (isDaytime 
+          ? `当前正处于【白天/${timeInfo.period}】，天色尚早、白天充裕！绝对严禁把白天说成“晚上/夜里”，绝对严禁在白天（上午/中午/下午）对用户说“今晚早点睡”、“今天就先休息睡吧”等逃避白天的劝睡话术；当用户在白天倾诉无力或询问“白天我要做点什么”时，必须立足于当前【${timeInfo.period}】时段给出当下的微小行动支持，绝不可直接快进到晚上入睡！`
+          : `当前正处于【${timeInfo.period}】，夜色渐深，适合回顾与整理，可温和陪伴并适时引导就寝。`) +
         (preCall.resolvedTime ? `\n- 用户输入所涉及时间已精准预解析为: ${JSON.stringify(preCall.resolvedTime)}` : '')
 
       const proactiveEchoPrompt = preCall.proactiveRecallHint || ''
@@ -305,7 +343,7 @@ export function registerIPCHandlers(config = {}) {
             return `${idx + 1}. [${timeStr}] [${m.project || '生活'}] 《${m.topic}》(ID: ${m.id}): ${m.content}`
           }).join('\n')
 
-          todayMemosPrompt = `【今日便签盒现有切片】（今日已有 ${activeMemos.length} 条生活切片，请维持时间线呼应与连贯性）：\n${memoListStr}\n\n- 连续性指导：若用户新倾诉的内容是上述某条便签的延续或补充，请继续传入相同 topic/memoId 增补；若是全天不同时段的新生活，开启新便签并承接时间线；若用户收尾总结，将今日所有切片按时间顺序第一人称有机融合成一篇日记。`
+          todayMemosPrompt = `【今日便签盒现有切片】（今日已有 ${activeMemos.length} 条生活切片，请维持时间线呼应与连贯性）：\n${memoListStr}\n\n- 连续性、去重与自主拆分规范：\n  1. 若用户新倾诉的内容是上述某条便签的延续或补充，请继续传入相同 topic/memoId 进行增补；\n  2. 严禁对同一段经历重复创建标题翻转或正文雷同的双胞胎便签；\n  3. 【小鸡自主拆分触发条件】：单次输入若同时横跨不同时段、不同项目面向，或者前半段为具象身体遭遇/事实经历而身处后半段抽离出了超越单次事件的高阶心理闭环与深度元认知反思时，可自主拆分为 2 张独立便签收录；\n  4. 【拆分切刀纪律】：经历便签仅记事实细节，反思便签仅记机制与洞察（以一句话交代缘起，严禁把整篇流水账重抄一遍）；若无法彻底互斥切分，必须合并为单条便签；并在回复中向用户解释拆分的逻辑；\n  5. 若用户收尾总结，将今日所有切片按时间顺序第一人称有机融合成一篇日记。`
         }
       } catch (err) {
         console.warn('[IPC:chat] Failed to inject today memos context:', err.message)
@@ -313,10 +351,32 @@ export function registerIPCHandlers(config = {}) {
 
       const combinedSystemPrompt = [customSystemPrompt, temporalAnchorPrompt, todayMemosPrompt, proactiveEchoPrompt].filter(Boolean).join('\n\n')
 
-      // 使用 ContextCompactor 组装滑动窗口(保留最近 6 条完整对白) + 历史讨论滚动摘要
+      // 检索与当前用户问题高相关的 Top-3 情节记忆暗知识 (严格隔离日记，仅限 source_type = 'chat')
+      let relevantMemories = []
+      try {
+        const repo = cm.getRepo()
+        if (repo && userQuery && String(userQuery).trim().length >= 2) {
+          const { getBackgroundMemoryReflector } = await import('./memory/BackgroundMemoryReflector.js')
+          const reflector = getBackgroundMemoryReflector({ memoryRepo: repo })
+          const queryVec = await reflector._computeEmbedding(userQuery)
+          relevantMemories = repo.searchSimilarMemories(queryVec, {
+            limit: 3,
+            sourceType: 'chat',
+            maxDistance: 1.2
+          })
+          if (relevantMemories.length > 0) {
+            console.log(`[IPC:chat] Retrieved ${relevantMemories.length} relevant episodic memories for query: "${userQuery.slice(0, 20)}..."`)
+          }
+        }
+      } catch (memSearchErr) {
+        console.warn('[IPC:chat] Failed to retrieve episodic memories:', memSearchErr.message)
+      }
+
+      // 使用 ContextCompactor 组装滑动窗口(保留最近 6 条完整对白) + 历史讨论滚动摘要 + 动态暗知识
       const executorMessages = globalContextCompactor.buildModelMessages({
         systemPrompt: combinedSystemPrompt,
         coreMemoryPrompt,
+        relevantMemories,
         messages: messages.filter(m => m.role !== 'system'),
         currentUserQuery: userQuery
       })
@@ -380,6 +440,16 @@ export function registerIPCHandlers(config = {}) {
           }, stepReacts)
         } catch (sessErr) {
           console.error('[IPC:chat] Failed to auto-save to session:', sessErr)
+        }
+      }
+
+      // 触发后台自进化闲时提炼器记录本轮对话
+      if (sessionId && userQuery && result.content) {
+        try {
+          const { getBackgroundMemoryReflector } = await import('./memory/BackgroundMemoryReflector.js')
+          getBackgroundMemoryReflector({ memoryRepo: cm.getRepo() }).recordTurn(sessionId, userQuery, result.content)
+        } catch (refErr) {
+          console.warn('[IPC:chat] Failed to record turn to memory reflector:', refErr.message)
         }
       }
 

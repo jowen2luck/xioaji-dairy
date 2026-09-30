@@ -10,12 +10,15 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()]
   },
   renderer: {
+    server: {
+      port: 5188,
+      strictPort: false
+    },
     resolve: {
       alias: {
         '@renderer': resolve('src/renderer/src')
       }
     },
     plugins: [vue()]
-    // 不再需要 server 配置块，完全删除它！
   }
 })

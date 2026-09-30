@@ -3,19 +3,42 @@
  * 职责：
  * 1. 管理多话题会话的生命周期（创建、切换、重命名、删除、查询）
  * 2. 独立维护各会话的消息流与 ReAct 思维步骤
- * 3. 兼容与自动迁移旧版本单一会话记录
+ * 3. 深度集成 SqliteSessionRepository，具备毫秒级单条追加与崩溃保护
+ * 4. 兼容与自动迁移旧版本单一会话记录与 JSON 文件快照
  */
 
 import fs from 'fs'
 import path from 'path'
+import { SqliteSessionRepository } from '../infrastructure/persistence/SqliteSessionRepository.js'
 
 export class SessionManager {
-  constructor({ storagePath } = {}) {
+  /**
+   * @param {Object} [options]
+   * @param {string} [options.storagePath] - agent-sessions.json 路径
+   * @param {SqliteSessionRepository} [options.sqliteRepo] - 底层 SQLite 仓储
+   */
+  constructor({ storagePath = '', sqliteRepo = null } = {}) {
     this.storagePath = storagePath || ''
+    this.sqliteRepo = sqliteRepo || null
     this.sessions = []
     this._initialized = false
-    if (this.storagePath) {
+
+    // 若未显式传入 sqliteRepo 且 storagePath 属于正式数据目录或为空，则自动挂载 SQLite 仓储
+    if (!this.sqliteRepo && (!this.storagePath || this.storagePath.includes('userData'))) {
+      try {
+        this.sqliteRepo = new SqliteSessionRepository({ legacyJsonPath: this.storagePath })
+      } catch (e) {
+        console.warn('[SessionManager] SQLite binding unavailable, falling back to JSON:', e.message)
+      }
+    }
+
+    if (this.sqliteRepo) {
+      this._initialized = true
+    } else if (this.storagePath) {
       this._load()
+    } else {
+      this.sessions = [this._createDefaultSession()]
+      this._initialized = true
     }
   }
 
@@ -57,6 +80,16 @@ export class SessionManager {
     }
   }
 
+  _syncFromJsonFallback() {
+    if (!this.storagePath || !this.sqliteRepo) return
+    try {
+      const list = this.sqliteRepo.listSessions()
+      const all = list.map(s => this.sqliteRepo.getSession(s.id)).filter(Boolean)
+      this.sessions = all
+      this._save()
+    } catch {}
+  }
+
   _createDefaultSession() {
     const now = new Date().toISOString()
     return {
@@ -71,10 +104,21 @@ export class SessionManager {
     }
   }
 
+  getRepo() {
+    if (!this.sqliteRepo) {
+      this.sqliteRepo = new SqliteSessionRepository({ legacyJsonPath: this.storagePath })
+    }
+    return this.sqliteRepo
+  }
+
   /**
    * 获取所有会话概览列表（按更新时间降序）
    */
   listSessions() {
+    if (this.sqliteRepo) {
+      return this.sqliteRepo.listSessions()
+    }
+
     return this.sessions
       .map(s => {
         const lastMsg = s.messages && s.messages.length > 0
@@ -100,6 +144,10 @@ export class SessionManager {
    * 获取指定会话完整数据
    */
   getSession(id) {
+    if (this.sqliteRepo) {
+      return this.sqliteRepo.getSession(id)
+    }
+
     let session = this.sessions.find(s => s.id === id)
     if (!session) {
       // 若不存在，默认返回第一个会话
@@ -112,6 +160,12 @@ export class SessionManager {
    * 创建新会话
    */
   createSession({ title, id } = {}) {
+    if (this.sqliteRepo) {
+      const created = this.sqliteRepo.createSession({ title, id })
+      this._syncFromJsonFallback()
+      return created
+    }
+
     const now = new Date().toISOString()
     const newSession = {
       id: id || `sess_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
@@ -133,6 +187,13 @@ export class SessionManager {
    */
   saveSession(sessionData) {
     if (!sessionData || !sessionData.id) return false
+
+    if (this.sqliteRepo) {
+      const res = this.sqliteRepo.saveSession(sessionData)
+      this._syncFromJsonFallback()
+      return res
+    }
+
     const index = this.sessions.findIndex(s => s.id === sessionData.id)
     if (index >= 0) {
       this.sessions[index] = {
@@ -167,6 +228,12 @@ export class SessionManager {
    * 追加消息与对应思维记录
    */
   appendMessage(sessionId, message, stepReacts = null) {
+    if (this.sqliteRepo) {
+      const res = this.sqliteRepo.appendMessage(sessionId, message, stepReacts)
+      this._syncFromJsonFallback()
+      return res
+    }
+
     let session = this.sessions.find(s => s.id === sessionId)
     if (!session) {
       session = this.createSession({ id: sessionId })
@@ -203,6 +270,12 @@ export class SessionManager {
    * 重命名会话
    */
   renameSession(id, title) {
+    if (this.sqliteRepo) {
+      const res = this.sqliteRepo.renameSession(id, title)
+      this._syncFromJsonFallback()
+      return res
+    }
+
     const session = this.sessions.find(s => s.id === id)
     if (session) {
       session.title = title ? title.trim() : '未命名会话'
@@ -217,6 +290,12 @@ export class SessionManager {
    * 删除会话
    */
   deleteSession(id) {
+    if (this.sqliteRepo) {
+      const res = this.sqliteRepo.deleteSession(id)
+      this._syncFromJsonFallback()
+      return res
+    }
+
     const idx = this.sessions.findIndex(s => s.id === id)
     if (idx >= 0) {
       this.sessions.splice(idx, 1)
@@ -244,6 +323,12 @@ export class SessionManager {
    * 迁移旧版单会话数据
    */
   migrateLegacyData(legacyMessages, legacyReacts = {}) {
+    if (this.sqliteRepo) {
+      const res = this.sqliteRepo.migrateLegacyData(legacyMessages, legacyReacts)
+      this._syncFromJsonFallback()
+      return res
+    }
+
     if (!Array.isArray(legacyMessages) || legacyMessages.length === 0) {
       return false
     }

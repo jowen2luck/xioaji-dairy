@@ -241,10 +241,18 @@ export class CalendarResolverTool extends Tool {
         return this.buildRange(start, start.add(4, 'day').endOf('day'), '工作日(周一至周五)');
     }
     
-    // 3.4 相对天数 (昨/前/明/后)
+    // 3.4 相对天数与时段 (昨/前/明/后/今，支持昨晚、今晚等)
     const relativeMap = { '昨': -1, '前': -2, '明': 1, '后': 2, '今': 0 };
     for (const [key, val] of Object.entries(relativeMap)) {
-        if (q.includes(key + '天') || (key === '昨' && q === '昨天') || (key === '今' && q === '今天')) {
+        if (
+            q.includes(key + '天') || 
+            q.includes(key + '晚') || 
+            q.includes(key + '夜') || 
+            q.includes(key + '晨') || 
+            q.includes(key + '日') ||
+            (key === '昨' && (q === '昨天' || q === '昨晚')) || 
+            (key === '今' && (q === '今天' || q === '今晚' || q === '今日'))
+        ) {
             const target = base.add(val, 'day');
             return this.buildRange(target.startOf('day'), target.endOf('day'), q);
         }

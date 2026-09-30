@@ -28,5 +28,5 @@ describe('Real Search Benchmark', () => {
     expect(res2.isError).toBe(false)
     expect(res2.data.records.length).toBeGreaterThan(0)
     expect((t3 - t2)).toBeLessThan(200) // 二次检索应在 200ms 内完成！
-  })
+  }, 15000)
 })

@@ -246,18 +246,18 @@
           />
         </div>
 
-        <!-- 2. 日记管理（次级） -->
-        <div class="view-panel" v-show="activeTab === 'journal'">
+        <!-- 2. 日记管理（次级，惰性挂载并常驻） -->
+        <div class="view-panel" v-if="loadedTabs.journal" v-show="activeTab === 'journal'">
           <DataBoardTab ref="dataBoardRef" @data-updated="handleDataUpdated" />
         </div>
 
-        <!-- 3. 周期复盘（次级） -->
-        <div class="view-panel" v-show="activeTab === 'reviews'">
+        <!-- 3. 周期复盘（次级，惰性挂载并常驻） -->
+        <div class="view-panel" v-if="loadedTabs.reviews" v-show="activeTab === 'reviews'">
           <ChroniclePage />
         </div>
 
-        <!-- 4. 深度统计（次级） -->
-        <div class="view-panel" v-show="activeTab === 'analysis'">
+        <!-- 4. 深度统计（次级，惰性挂载并常驻） -->
+        <div class="view-panel" v-if="loadedTabs.analysis" v-show="activeTab === 'analysis'">
           <AnalysisPage />
         </div>
       </div>
@@ -269,7 +269,7 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, watch, onMounted, onUnmounted } from 'vue'
 import AgentWorkbench from './AgentWorkbench.vue'
 import DataBoardTab from './DataBoardTab.vue'
 import ChroniclePage from './chronicle/ChroniclePage.vue'
@@ -298,6 +298,14 @@ const activeTab = ref('explore')
 const isSidebarCollapsed = ref(false)
 const showSettings = ref(false)
 
+// 惰性加载标记：默认只挂载首屏 explore，次级页面在用户首次访问时才按需挂载并常驻
+const loadedTabs = reactive({
+  explore: true,
+  journal: false,
+  reviews: false,
+  analysis: false
+})
+
 // 会话数据状态
 const sessionsList = ref([])
 const currentSessionId = ref('')
@@ -314,17 +322,23 @@ const toggleSidebar = () => {
 // 切换主/次级视图
 const switchView = (viewName) => {
   activeTab.value = viewName
+  if (viewName in loadedTabs) {
+    loadedTabs[viewName] = true
+  }
   if (viewName === 'journal') {
     dataBoardRef.value?.refreshDataSilently?.()
   }
 }
 
-// 监听视图切换，进入日记管理时自动拉取最新数据
+// 监听视图切换，进入对应视图时激活惰性挂载，若是日记管理则拉取最新数据
 watch(activeTab, (newTab) => {
+  if (newTab in loadedTabs) {
+    loadedTabs[newTab] = true
+  }
   if (newTab === 'journal') {
     dataBoardRef.value?.refreshDataSilently?.()
   }
-})
+}, { immediate: true })
 
 // 监听全局与主进程数据变更通知
 const handleGlobalJournalUpdate = () => {

@@ -1,20 +1,42 @@
 /**
  * SQL 分析服务
- * 基于 AlaSQL 的内存数据库,支持复杂统计查询
+ * 基于原生 SQLite 底座与高性能内存聚合引擎，支持复杂统计与多维度洞察
  * 
- * 新增功能：
- * - AI 元数据统计分析（情绪分布、能量趋势、人际网络等）
+ * 核心能力：
+ * - 基础统计摘要与按维度分组聚合
+ * - 时间段分布与工作日/周末对比
+ * - AI 元数据统计分析（情绪分布、能量趋势、人际网络、因果链等）
+ * - 原生 SQLite 直接查询支持
  */
 
-import alasql from 'alasql'
+import { getDatabaseManager } from '../infrastructure/db/DatabaseManager.js'
 
 let sqlServiceInstance = null
 
 export class SqlService {
-  constructor() {
-    this.db = alasql
-    // 配置 AlaSQL
-    this.db.options.cache = false
+  /**
+   * @param {Object} [options]
+   * @param {DatabaseManager} [options.dbManager]
+   */
+  constructor({ dbManager = null } = {}) {
+    this.dbManager = dbManager || null
+    if (!this.dbManager) {
+      try {
+        this.dbManager = getDatabaseManager()
+      } catch {}
+    }
+  }
+
+  /**
+   * 原生 SQLite 查询执行器
+   * @param {string} sql
+   * @param {Array<any>} params
+   */
+  querySql(sql, params = []) {
+    if (this.dbManager) {
+      return this.dbManager.prepare(sql).all(...params)
+    }
+    return []
   }
 
   /**
@@ -22,25 +44,48 @@ export class SqlService {
    */
   getStatsSummary(data) {
     try {
-      const summary = this.db(`
-        SELECT
-          COUNT(*) as totalRecords,
-          COUNT(DISTINCT _meta_project) as projectCount,
-          SUM(_meta_duration_min) as totalDurationMin,
-          AVG(_meta_duration_min) as avgDurationMin,
-          MIN(time) as earliestDate,
-          MAX(time) as latestDate
-        FROM ?
-      `, [data])[0]
+      if (!Array.isArray(data) || data.length === 0) {
+        return {
+          totalRecords: 0,
+          projectCount: 0,
+          totalDurationHours: 0,
+          avgDurationMin: 0,
+          dateRange: { start: null, end: null }
+        }
+      }
+
+      const projects = new Set()
+      let totalDurationMin = 0
+      let durationCount = 0
+      let earliestDate = null
+      let latestDate = null
+
+      for (const r of data) {
+        if (!r) continue
+        const proj = r._meta_project || r.shanggexiangmu || r.project
+        if (proj) projects.add(proj)
+
+        if (typeof r._meta_duration_min === 'number') {
+          totalDurationMin += r._meta_duration_min
+          durationCount += 1
+        }
+        const timeVal = r.time || r.occurred_at || r.occurredAt
+        if (timeVal) {
+          if (!earliestDate || timeVal < earliestDate) earliestDate = timeVal
+          if (!latestDate || timeVal > latestDate) latestDate = timeVal
+        }
+      }
+
+      const avgDurationMin = durationCount > 0 ? totalDurationMin / durationCount : 0
 
       return {
-        totalRecords: summary.totalRecords || 0,
-        projectCount: summary.projectCount || 0,
-        totalDurationHours: Math.round((summary.totalDurationMin || 0) / 60 * 10) / 10,
-        avgDurationMin: Math.round(summary.avgDurationMin || 0),
+        totalRecords: data.length,
+        projectCount: projects.size,
+        totalDurationHours: Math.round((totalDurationMin / 60) * 10) / 10,
+        avgDurationMin: Math.round(avgDurationMin),
         dateRange: {
-          start: summary.earliestDate,
-          end: summary.latestDate
+          start: earliestDate,
+          end: latestDate
         }
       }
     } catch (error) {
@@ -54,26 +99,42 @@ export class SqlService {
    */
   analyzeByDimension(data, dimension = '_meta_project', limit = 10) {
     try {
-      const results = this.db(`
-        SELECT
-          ${dimension} as dimension,
-          COUNT(*) as count,
-          SUM(_meta_duration_min) as totalDuration,
-          AVG(_meta_duration_min) as avgDuration,
-          AVG(_meta_mood_score) as avgMood
-        FROM ?
-        WHERE ${dimension} IS NOT NULL
-        GROUP BY ${dimension}
-        ORDER BY count DESC
-        LIMIT ${limit}
-      `, [data])
+      if (!Array.isArray(data)) return []
 
-      return results.map(r => ({
-        name: r.dimension,
-        count: r.count,
-        totalDurationHours: Math.round((r.totalDuration || 0) / 60 * 10) / 10,
-        avgDurationMin: Math.round(r.avgDuration || 0),
-        avgMoodScore: Math.round((r.avgMood || 0) * 100) / 100
+      const groups = new Map()
+
+      for (const r of data) {
+        if (!r) continue
+        const dimVal = r[dimension]
+        if (dimVal === undefined || dimVal === null) continue
+
+        let group = groups.get(dimVal)
+        if (!group) {
+          group = { name: dimVal, count: 0, durationSum: 0, durationCount: 0, moodSum: 0, moodCount: 0 }
+          groups.set(dimVal, group)
+        }
+
+        group.count += 1
+        if (typeof r._meta_duration_min === 'number') {
+          group.durationSum += r._meta_duration_min
+          group.durationCount += 1
+        }
+        if (typeof r._meta_mood_score === 'number') {
+          group.moodSum += r._meta_mood_score
+          group.moodCount += 1
+        }
+      }
+
+      const sorted = Array.from(groups.values())
+        .sort((a, b) => b.count - a.count)
+        .slice(0, limit)
+
+      return sorted.map(g => ({
+        name: g.name,
+        count: g.count,
+        totalDurationHours: Math.round((g.durationSum / 60) * 10) / 10,
+        avgDurationMin: g.durationCount > 0 ? Math.round(g.durationSum / g.durationCount) : 0,
+        avgMoodScore: g.moodCount > 0 ? Math.round((g.moodSum / g.moodCount) * 100) / 100 : 0
       }))
     } catch (error) {
       console.error('[SqlService] Error in analyzeByDimension:', error)
@@ -86,31 +147,51 @@ export class SqlService {
    */
   analyzeTimeDistribution(data) {
     try {
-      const results = this.db(`
-        SELECT
-          _meta_time_range as timeRange,
-          COUNT(*) as count,
-          SUM(_meta_duration_min) as totalDuration,
-          AVG(_meta_mood_score) as avgMood
-        FROM ?
-        WHERE _meta_time_range IS NOT NULL
-        GROUP BY _meta_time_range
-        ORDER BY 
-          CASE _meta_time_range
-            WHEN '上午' THEN 1
-            WHEN '中午' THEN 2
-            WHEN '下午' THEN 3
-            WHEN '晚上' THEN 4
-            WHEN '深夜' THEN 5
-            ELSE 6
-          END
-      `, [data])
+      if (!Array.isArray(data)) return []
+
+      const orderMap = {
+        '上午': 1,
+        '中午': 2,
+        '下午': 3,
+        '晚上': 4,
+        '深夜': 5
+      }
+
+      const groups = new Map()
+
+      for (const r of data) {
+        if (!r) continue
+        const tr = r._meta_time_range
+        if (!tr) continue
+
+        let group = groups.get(tr)
+        if (!group) {
+          group = { timeRange: tr, count: 0, durationSum: 0, moodSum: 0, moodCount: 0 }
+          groups.set(tr, group)
+        }
+
+        group.count += 1
+        if (typeof r._meta_duration_min === 'number') {
+          group.durationSum += r._meta_duration_min
+        }
+        if (typeof r._meta_mood_score === 'number') {
+          group.moodSum += r._meta_mood_score
+          group.moodCount += 1
+        }
+      }
+
+      const results = Array.from(groups.values())
+        .sort((a, b) => {
+          const ordA = orderMap[a.timeRange] || 99
+          const ordB = orderMap[b.timeRange] || 99
+          return ordA - ordB
+        })
 
       return results.map(r => ({
         timeRange: r.timeRange,
         count: r.count,
-        totalDurationHours: Math.round((r.totalDuration || 0) / 60 * 10) / 10,
-        avgMoodScore: Math.round((r.avgMood || 0) * 100) / 100
+        totalDurationHours: Math.round((r.durationSum / 60) * 10) / 10,
+        avgMoodScore: r.moodCount > 0 ? Math.round((r.moodSum / r.moodCount) * 100) / 100 : 0
       }))
     } catch (error) {
       console.error('[SqlService] Error in analyzeTimeDistribution:', error)
@@ -169,21 +250,33 @@ export class SqlService {
    */
   analyzeMoodTrend(data) {
     try {
-      const results = this.db(`
-        SELECT
-          _meta_year as year,
-          _meta_month as month,
-          AVG(_meta_mood_score) as avgMood,
-          COUNT(*) as count
-        FROM ?
-        WHERE _meta_year IS NOT NULL AND _meta_month IS NOT NULL
-        GROUP BY _meta_year, _meta_month
-        ORDER BY _meta_year, _meta_month
-      `, [data])
+      if (!Array.isArray(data)) return []
+
+      const groups = new Map()
+
+      for (const r of data) {
+        if (!r || r._meta_year == null || r._meta_month == null) continue
+        const periodKey = `${r._meta_year}-${String(r._meta_month).padStart(2, '0')}`
+
+        let group = groups.get(periodKey)
+        if (!group) {
+          group = { period: periodKey, year: r._meta_year, month: r._meta_month, count: 0, moodSum: 0, moodCount: 0 }
+          groups.set(periodKey, group)
+        }
+
+        group.count += 1
+        if (typeof r._meta_mood_score === 'number') {
+          group.moodSum += r._meta_mood_score
+          group.moodCount += 1
+        }
+      }
+
+      const results = Array.from(groups.values())
+        .sort((a, b) => (a.year !== b.year ? a.year - b.year : a.month - b.month))
 
       return results.map(r => ({
-        period: `${r.year}-${String(r.month).padStart(2, '0')}`,
-        avgMoodScore: Math.round((r.avgMood || 0) * 100) / 100,
+        period: r.period,
+        avgMoodScore: r.moodCount > 0 ? Math.round((r.moodSum / r.moodCount) * 100) / 100 : 0,
         count: r.count
       }))
     } catch (error) {
