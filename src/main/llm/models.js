@@ -5,13 +5,18 @@
  */
 
 import { ChatOpenAI } from '@langchain/openai'
+import { bailianPoolManager, BAILIAN_AUTO_MODEL_ID } from './bailianPool.js'
 
 // 定义不同 baseURL 对应的 API Key 环境变量映射
 const API_KEY_MAP = {
   'https://dashscope.aliyuncs.com/compatible-mode/v1': 'DASHSCOPE_API_KEY_QWEN',
   'https://dashscope.aliyuncs.com/api/v1': 'DASHSCOPE_API_KEY',  // 新增：百炼 API 端点
+  'https://llm-fxdsk6826w304s38.cn-beijing.maas.aliyuncs.com/compatible-mode/v1': 'DASHSCOPE_API_KEY',
   'https://uni-api.cstcloud.cn/v1': 'DASHSCOPE_API_KEY_SCTCLOUD',
-  'https://api.openai.com/v1': 'OPENAI_API_KEY'
+  'https://api.openai.com/v1': 'OPENAI_API_KEY',
+  'http://127.0.0.1:8045/v1': 'OPENAI_API_KEY',
+  'https://api.longcat.chat/openai': 'LONGCAT_API_KEY',
+  'https://api.longcat.chat/openai/v1': 'LONGCAT_API_KEY'
 }
 
 /**
@@ -26,8 +31,12 @@ function getAPIKeyForBaseURL(baseURL) {
     return process.env[envVar]
   }
   
+  if (baseURL?.includes('dashscope') || baseURL?.includes('maas.aliyuncs.com')) {
+    return process.env.DASHSCOPE_API_KEY || process.env.DASHSCOPE_API_KEY_QWEN || process.env.ANTI_DASHSCOPE_API_KEY || ''
+  }
+
   // 如果没有找到特定的 API Key，则回退到默认的 API Key
-  return process.env.DASHSCOPE_API_KEY || process.env.OPENAI_API_KEY || ''
+  return process.env.DASHSCOPE_API_KEY || process.env.DASHSCOPE_API_KEY_QWEN || process.env.OPENAI_API_KEY || ''
 }
 
 /**
@@ -38,22 +47,30 @@ function getAPIKeyForBaseURL(baseURL) {
  * @returns {ChatOpenAI} - LangChain 标准聊天模型
  */
 export function createChatModel(baseURL, model, options = {}) {
+  let effectiveModel = model
+  if (model === BAILIAN_AUTO_MODEL_ID || model === 'bailian-auto') {
+    const current = bailianPoolManager.getCurrentModel()
+    effectiveModel = current?.id || 'qwen3.7-flash-2026-07-15'
+    console.log(`[createChatModel] 自动将 bailian-auto 解析为当前可用百炼模型: ${effectiveModel}`)
+  }
+
   const apiKey = getAPIKeyForBaseURL(baseURL)
   
   console.log('[createChatModel] Configuration:', {
     baseURL,
-    model,
+    model: effectiveModel,
+    originalModel: model,
     hasAPIKey: !!apiKey,
     apiKeyLength: apiKey?.length || 0
   })
   
   if (!apiKey) {
-    throw new Error(`Missing API key for baseURL: ${baseURL}. Please set DASHSCOPE_API_KEY_QWEN or OPENAI_API_KEY environment variable.`)
+    throw new Error(`Missing API key for baseURL: ${baseURL}. Please set DASHSCOPE_API_KEY or DASHSCOPE_API_KEY_QWEN or OPENAI_API_KEY environment variable.`)
   }
 
   const config = {
     apiKey: apiKey,
-    modelName: model,
+    modelName: effectiveModel,
     temperature: options.temperature ?? 0.7,
     topP: options.top_p ?? 0.9,
     timeout: 60000,  // 增加到60秒

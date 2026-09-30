@@ -11,3 +11,29 @@ out
 src/test/
 .qoder/
 .trae/
+
+# ProjectOS runtime files
+.anchor/runs/*-context.md
+.anchor/evidence/*
+!.anchor/evidence/.gitkeep
+.anchor/views/status.md
+.anchor/views/inbox.md
+
+# External Reference Repositories
+references/
+.references/
+
+# Cache and local database
+.cache/
+src/main/.cache/
+*.db
+*.db-shm
+*.db-wal
+
+# AI models & ONNX files
+resources/models/
+*.onnx
+
+# Python cache
+__pycache__/
+*.pyc

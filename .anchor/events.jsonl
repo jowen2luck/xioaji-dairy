@@ -1,0 +1,7 @@
+{"schema_version":1,"event":"project.initialized","timestamp":"2026-07-25T08:31:00.000Z","data":{"project":"daily_log_vue"}}
+{"schema_version":1,"event":"phase3.completed","timestamp":"2026-07-25T22:23:00.000Z","data":{"project":"daily_log_vue","tasks":["T3.2","T3.3","T3.4","T3.5","T3.6","T3.11"],"milestones":["M2.4","M2.5"],"evidence":"RUN-004-phase3-verification.md"}}
+{"schema_version":1,"event":"integration.summary_verified","timestamp":"2026-07-25T22:42:00.000Z","data":{"project":"daily_log_vue","target":"summary","evidence":"RUN-005-summary-integration.md"}}
+{"schema_version":1,"event":"user_persona_verified","timestamp":"2026-07-25T22:44:00.000Z","data":{"project":"daily_log_vue","scenarios_count":10,"passed":10,"evidence":"RUN-006-user-scenarios.md"}}
+{"schema_version":1,"event":"retrieval_logic_refactored","timestamp":"2026-07-25T22:49:00.000Z","data":{"project":"daily_log_vue","principle":"raw_text_and_ai_meta_primary","evidence":"RUN-007-rawtext-retrieval-refactor.md"}}
+{"schema_version":1,"event":"evaluation_plan_implemented","timestamp":"2026-07-25T22:56:00.000Z","data":{"project":"daily_log_vue","plan":"retrieval-architecture-evaluation.md","evidence":"RUN-008-evaluation-implementation.md"}}
+{"schema_version":1,"event":"agent_mechanism_self_checked","timestamp":"2026-07-25T23:19:00.000Z","data":{"project":"daily_log_vue","design":"agent-mechanism-audit-design.md","evidence":"RUN-009-agent-mechanism-audit-verification.md"}}

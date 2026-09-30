@@ -13,6 +13,38 @@ import { getToolRegistry } from '../tools/registry.js'
 import { AgentExecutor } from './executor.js'
 import { analyzeIntent, analyzeIntentWithLLM } from '../intent/analyzer.js'
 import { updateRecord } from '../data/index.js'
+import { SessionManager } from './sessionManager.js'
+import { CoreMemoryManager } from './memory/coreMemory.js'
+import { setGlobalCoreMemoryManager } from '../tools/coreMemory.js'
+import { globalPreCallMiddleware } from './middleware/preCallMiddleware.js'
+import { globalContextCompactor } from './middleware/contextCompactor.js'
+import { getMemoManager } from '../memo/memoManager.js'
+import dayjs from '../../utils/date.js'
+import { bailianPoolManager } from '../llm/bailianPool.js'
+
+let sessionManager = null
+let coreMemoryManager = null
+
+export function getSessionManager() {
+  if (!sessionManager) {
+    const userDataDir = app.getPath('userData')
+    sessionManager = new SessionManager({
+      storagePath: path.join(userDataDir, 'agent-sessions.json')
+    })
+  }
+  return sessionManager
+}
+
+export function getCoreMemoryManager() {
+  if (!coreMemoryManager) {
+    const userDataDir = app.getPath('userData')
+    coreMemoryManager = new CoreMemoryManager({
+      storagePath: path.join(userDataDir, 'core-memory.json')
+    })
+    setGlobalCoreMemoryManager(coreMemoryManager)
+  }
+  return coreMemoryManager
+}
 
 /**
  * 注册所有 IPC 处理器
@@ -21,21 +53,96 @@ import { updateRecord } from '../data/index.js'
 export function registerIPCHandlers(config = {}) {
   console.log('[IPC] Registering LangChain-based handlers')
 
+  const sm = getSessionManager()
+  const cm = getCoreMemoryManager()
+
+  // 注册多会话管理 IPC
+  ipcMain.handle('sessions:list', async () => sm.listSessions())
+  ipcMain.handle('sessions:get', async (_event, id) => sm.getSession(id))
+  ipcMain.handle('sessions:create', async (_event, payload) => sm.createSession(payload))
+  ipcMain.handle('sessions:save', async (_event, session) => sm.saveSession(session))
+  ipcMain.handle('sessions:delete', async (_event, id) => sm.deleteSession(id))
+  ipcMain.handle('sessions:rename', async (_event, { id, title }) => sm.renameSession(id, title))
+  ipcMain.handle('sessions:migrate-legacy', async (_event, { messages, reacts }) => sm.migrateLegacyData(messages, reacts))
+
+  // 注册常驻画像内存 IPC
+  ipcMain.handle('core-memory:get', async () => cm.getMemory())
+  ipcMain.handle('core-memory:update', async (_event, { section, content }) => cm.updateSection(section, content))
+
+  // 注册便签管理 IPC
+  const mm = getMemoManager()
+  ipcMain.handle('memos:list', async (_e, filter) => mm.listMemos(filter))
+  ipcMain.handle('memos:save', async (_e, memo) => mm.upsertMemo(memo))
+  ipcMain.handle('memos:delete', async (_e, id) => mm.deleteMemo(id))
+  ipcMain.handle('memos:convert-to-record', async (_e, { memoId, recordOverrides }) => mm.convertToRecord(memoId, recordOverrides))
+  ipcMain.handle('memos:merge-to-record', async (_e, { memoIds, recordOverrides }) => mm.mergeToRecord(memoIds, recordOverrides))
+
+  // 注册百炼模型池状态与控制 IPC
+  ipcMain.handle('bailian:get-status', async () => bailianPoolManager.getPoolSummary())
+  ipcMain.handle('bailian:reset-pool', async () => {
+    bailianPoolManager.resetPool()
+    return bailianPoolManager.getPoolSummary()
+  })
+
+  // 活跃任务的中断控制器映射 (requestId -> AbortController)
+  const activeAbortControllers = new Map()
+
+  // 注册任务终止 IPC
+  ipcMain.handle('assistant:abort', async (_event, { requestId }) => {
+    console.log('[IPC:abort] Received abort request for:', requestId)
+    if (!requestId) return { success: false, error: 'Missing requestId' }
+    const controller = activeAbortControllers.get(requestId)
+    if (controller) {
+      controller.abort()
+      activeAbortControllers.delete(requestId)
+      console.log('[IPC:abort] Successfully aborted request:', requestId)
+      return { success: true }
+    }
+    console.warn('[IPC:abort] No active controller found for:', requestId)
+    return { success: false, message: 'Request not found or already finished' }
+  })
+
+  // 注册单条日记撤销/删除 IPC (方便前端 UI 卡片一键撤销)
+  ipcMain.handle('journal:delete', async (_event, { id }) => {
+    console.log('[IPC:journal:delete] Deleting journal record:', id)
+    if (!id) return { success: false, error: 'Missing id' }
+    const { deleteRecord } = await import('../data/index.js')
+    return await deleteRecord(id)
+  })
+
   /**
    * handler: assistant:chat
    * 主要的聊天接口，集成模型、工具和代理
    */
   ipcMain.handle('assistant:chat', async (event, payload) => {
+    let effectiveRequestId = null
     try {
-      const { messages = [], model, baseURL, tools, config: userConfig, userQuery, mock, disableTools, requestId, extraBody } = payload || {}
-      const effectiveRequestId = requestId || `req_${Date.now()}_${Math.random().toString(16).slice(2)}`
+      const {
+        sessionId,
+        messages = [],
+        model,
+        baseURL,
+        tools,
+        config: userConfig,
+        userQuery,
+        mock,
+        disableTools,
+        requestId,
+        extraBody
+      } = payload || {}
+      effectiveRequestId = requestId || `req_${Date.now()}_${Math.random().toString(16).slice(2)}`
+      const abortController = new AbortController()
+      activeAbortControllers.set(effectiveRequestId, abortController)
+
       const pushEvent = (evt) => {
         try {
-          event.sender.send('assistant:event', { requestId: effectiveRequestId, ...evt })
+          if (effectiveRequestId) {
+            event.sender.send('assistant:event', { requestId: effectiveRequestId, ...evt })
+          }
         } catch {}
       }
 
-      console.log('[IPC:chat] Received request', { model, userQuery })
+      console.log('[IPC:chat] Received request', { sessionId, model, userQuery, effectiveRequestId })
 
       // Mock 模式
       if (mock === true) {
@@ -49,6 +156,16 @@ export function registerIPCHandlers(config = {}) {
           },
         }
       }
+
+      // 会话与常驻记忆管理器
+      const sm = getSessionManager()
+      const cm = getCoreMemoryManager()
+
+      // 前置中间件：时间锚点、自然语言时间预解析（复用 CalendarResolverTool）、闲聊轻量检测、心头回忆嗅探
+      const preCall = await globalPreCallMiddleware.process({
+        userQuery,
+        messages
+      })
 
       // 初始化模型
       const llm = initializeModel({
@@ -67,76 +184,55 @@ export function registerIPCHandlers(config = {}) {
           'DASHSCOPE_API_KEY_QWEN=' + (process.env.DASHSCOPE_API_KEY_QWEN ? 'SET' : 'NOT SET'),
           'DASHSCOPE_API_KEY_SCTCLOUD=' + (process.env.DASHSCOPE_API_KEY_SCTCLOUD ? 'SET' : 'NOT SET'),
           'OPENAI_API_KEY=' + (process.env.OPENAI_API_KEY ? 'SET' : 'NOT SET'),
-          'DASHSCOPE_API_KEY=' + (process.env.DASHSCOPE_API_KEY ? 'SET' : 'NOT SET')
+          'DASHSCOPE_API_KEY=' + (process.env.DASHSCOPE_API_KEY ? 'SET' : 'NOT SET'),
+          'LONGCAT_API_KEY=' + (process.env.LONGCAT_API_KEY ? 'SET' : 'NOT SET')
         )
       }
       const toolRegistry = getToolRegistry()
 
-      // 确定启用的工具
-      const enabledToolNames = tools ? tools.map(t => t.function?.name || t.name).filter(Boolean) : []
+      // 确定启用的工具：全量提供给主模型，由主模型在 ReAct 循环中基于 Function Calling 自然决策
+      let rawToolNames = tools ? tools.map(t => t.function?.name || t.name).filter(Boolean) : []
+      if (rawToolNames.length === 0) {
+        rawToolNames = Array.from(toolRegistry.tools.keys())
+      }
+      // 确保核心工具始终在可用列表中
+      const coreTools = [
+        'create_record',
+        'update_record',
+        'query_records',
+        'search_records',
+        'sql_analysis',
+        'insight_analyst',
+        'calendar_resolver',
+        'metadata_explorer',
+        'get_record_detail',
+        'update_core_memory',
+        'manage_memo'
+      ]
+      const enabledToolNames = Array.from(new Set([...rawToolNames, ...coreTools.filter(t => toolRegistry.tools.has(t))]))
 
-      // 结构化意图分析（使用 LLM）
+      // 意图与工具决策（方案 A：移除额外 Intent LLM 调用，毫秒级直接执行）
       let intentContext = null
-      let intentTools = []
-      
-      if (userQuery) {
-        try {
-          // 尝试使用 LLM 进行结构化意图分析
-          // 【改进】如果配置中指定了 intentModel，创建独立的意图分析 LLM
-          let intentLLM = llm  // 默认使用主 LLM
-          if (userConfig?.intentModel && userConfig.intentModel !== model) {
-            console.log('[IPC:chat] Creating separate intent analyzer LLM:', userConfig.intentModel)
-            intentLLM = initializeModel({
-              selectedBaseURL: baseURL,
-              selectedModel: userConfig.intentModel,
-              temperature: userConfig?.temperature ?? 0.7,
-              top_p: userConfig?.top_p ?? 0.9,
-            })
-          }
-          
-      // 【修改点】将 messages (历史记录) 传入分析器，实现上下文指代消解
-          // 这样意图分析器就能"看到"历史对话，理解"它"、"那个项目"等指代词
-          console.log('[IPC:chat] messages format check:', {
-            isArray: Array.isArray(messages),
-            length: messages.length,
-            sample: messages.slice(0, 2).map(m => ({
-              role: m.role,
-              hasContent: !!m.content,
-              contentType: typeof m.content,
-              contentLength: m.content?.length || 0
-            }))
-          })
-          console.log('[IPC:chat] Passing history to intent analyzer, messages length:', messages.length)
-          intentContext = await analyzeIntentWithLLM(userQuery, intentLLM, messages)
-          
-          if (intentContext && intentContext.suggested_pipeline) {
-            // 使用意图分析推荐的工具链
-            intentTools = intentContext.suggested_pipeline.filter(tool => 
-              enabledToolNames.includes(tool)
-            )
-            
-            // 【核心改进】强制注入基础辅助工具，防止意图分析器漏判
-            // 这些工具对于日记查询至关重要，应该始终可用
-            const essentialTools = ['calendar_resolver', 'metadata_explorer']
-            essentialTools.forEach(toolName => {
-              if (enabledToolNames.includes(toolName) && !intentTools.includes(toolName)) {
-                console.log(`[IPC:chat] Injecting essential tool: ${toolName}`)
-                intentTools.push(toolName)
-              }
-            })
-            
-            console.log('[IPC:chat] Intent context:', intentContext)
-            console.log('[IPC:chat] Final tool list (with essential tools):', intentTools)
-          }
-        } catch (error) {
-          console.error('[IPC:chat] Intent analysis failed, using fallback:', error)
-          // 降级到旧版关键词匹配
-          intentTools = analyzeIntent(userQuery, enabledToolNames)
+      let intentTools = enabledToolNames
+
+      if (preCall.isCasual) {
+        console.log('[IPC:chat] PreCall detected casual greeting, bypassing tools')
+        intentContext = {
+          primary_intent: 'casual',
+          suggested_pipeline: [],
+          maxIterations: 1
+        }
+        intentTools = []
+      } else {
+        intentContext = {
+          primary_intent: 'direct',
+          standalone_query: userQuery,
+          suggested_pipeline: enabledToolNames,
+          maxIterations: 5
         }
       }
 
-      console.log('[IPC:chat] Enabled tools:', enabledToolNames)
-      console.log('[IPC:chat] Intent tools:', intentTools)
+      console.log('[IPC:chat] Effective tools provided to agent:', intentTools)
 
       // 如果禁用工具，直接调用 LLM
       if (disableTools === true) {
@@ -173,7 +269,7 @@ export function registerIPCHandlers(config = {}) {
         baseURL,
         apiKey: getAPIKeyForBaseURL(baseURL),
         model,
-        intentModel: userConfig?.intentModel, // 传递意图识别模型配置
+        intentModel: userConfig?.intentModel,
         temperature: userConfig?.temperature ?? 0.7,
         top_p: userConfig?.top_p ?? 0.9,
         requestId: effectiveRequestId,
@@ -181,54 +277,109 @@ export function registerIPCHandlers(config = {}) {
         streamFinal: true
       })
 
-      // 【关键修改】"吸星大法" - 构造干净的消息列表
-      // 意图分析器已经从历史中"吸收"了营养（指代消解、实体提取等）
-      // 现在我们切断历史，只给 Executor 重写后的独立查询
-      let standaloneQuery = userQuery // 默认使用原查询
-      if (intentContext?.standalone_query) {
-        standaloneQuery = intentContext.standalone_query
-        console.log('[IPC:chat] Query rewritten:', userQuery, '->', standaloneQuery)
+      // 组装 System Prompt (基础提示词 + 动态时间锚点 + 长期记忆 Core Memory)
+      const systemMessage = messages.find(m => m.role === 'system')
+      let customSystemPrompt = systemMessage ? systemMessage.content : ''
+      if (customSystemPrompt.includes('主动调用 create_record 工具将日记持久化保存入库')) {
+        customSystemPrompt = customSystemPrompt.replace(
+          /当用户表达记录日常的意图[^\n]*主动调用 create_record 工具将日记持久化保存入库[^\n]*\n?/g,
+          '用户记录遵循双路径模型：显式指令调用 create_record；伴侣自然倾诉与吐槽调用 manage_memo(upsert) 存入便签盒并真诚倾听，绝不直接打断结案。\n'
+        )
+      }
+      const coreMemoryPrompt = cm.renderPrompt()
+
+      const temporalAnchorPrompt = `【系统动态时间锚点】\n- 当前系统时间: ${preCall.timeAnchor}` +
+        (preCall.resolvedTime ? `\n- 用户输入所涉及时间已精准预解析为: ${JSON.stringify(preCall.resolvedTime)}` : '')
+
+      const proactiveEchoPrompt = preCall.proactiveRecallHint || ''
+
+      // 提取今日活跃便签列表，构建连续性上下文注入
+      let todayMemosPrompt = ''
+      try {
+        const mm = getMemoManager()
+        const todayStr = dayjs().format('YYYY-MM-DD')
+        const activeMemos = mm.listMemos({ status: 'active', date: todayStr })
+        if (activeMemos && activeMemos.length > 0) {
+          const memoListStr = activeMemos.map((m, idx) => {
+            const timeStr = m.createdAt ? dayjs(m.createdAt).format('HH:mm') : ''
+            return `${idx + 1}. [${timeStr}] [${m.project || '生活'}] 《${m.topic}》(ID: ${m.id}): ${m.content}`
+          }).join('\n')
+
+          todayMemosPrompt = `【今日便签盒现有切片】（今日已有 ${activeMemos.length} 条生活切片，请维持时间线呼应与连贯性）：\n${memoListStr}\n\n- 连续性指导：若用户新倾诉的内容是上述某条便签的延续或补充，请继续传入相同 topic/memoId 增补；若是全天不同时段的新生活，开启新便签并承接时间线；若用户收尾总结，将今日所有切片按时间顺序第一人称有机融合成一篇日记。`
+        }
+      } catch (err) {
+        console.warn('[IPC:chat] Failed to inject today memos context:', err.message)
       }
 
-      // 提取前端传入的 System Prompt (如果有)
-      // 这样可以保留"鸡大师"等角色设定，同时切断对话历史
-      const systemMessage = messages.find(m => m.role === 'system')
-      const customSystemPrompt = systemMessage ? systemMessage.content : ''
+      const combinedSystemPrompt = [customSystemPrompt, temporalAnchorPrompt, todayMemosPrompt, proactiveEchoPrompt].filter(Boolean).join('\n\n')
 
-      // 构造给 Executor 的"干净"消息列表
-      // 【核心】不传递完整的历史记录，而是：
-      // - 仅包含当前的独立查询
-      // - 这样 Executor "看不到"之前的对话，必须调用工具获取信息
-      // - Token 消耗从 O(n) 降低到 O(1)，避免"偷懒"现象
-      const executorMessages = [
-        // 注意：System Prompt 会在 Executor.formatMessages() 中自动添加
-        // 这里只需传递当前的用户查询
-        { role: 'user', content: standaloneQuery }
-      ]
+      // 使用 ContextCompactor 组装滑动窗口(保留最近 6 条完整对白) + 历史讨论滚动摘要
+      const executorMessages = globalContextCompactor.buildModelMessages({
+        systemPrompt: combinedSystemPrompt,
+        coreMemoryPrompt,
+        messages: messages.filter(m => m.role !== 'system'),
+        currentUserQuery: userQuery
+      })
 
-      console.log('[IPC:chat] Executor will receive:',{
+      console.log('[IPC:chat] Executor messages prepared:', {
         messageCount: executorMessages.length,
-        standaloneQuery,
-        hasHistory: false,
-        hasSystemPrompt: !!customSystemPrompt,
-        note: '历史已切断，只有独立查询'
+        userQuery,
+        hasCoreMemory: !!coreMemoryPrompt,
+        hasTimeAnchor: true
       })
 
-      // 执行代理（传入意图上下文）
+      // 执行代理（传入意图上下文与中止信号）
       const result = await executor.execute({
-        messages: executorMessages, // <--- 传入干净的消息列表（已切断历史）
-        systemPrompt: customSystemPrompt, // <--- 传入前端定义的 System Prompt
-        userQuery: standaloneQuery, // <--- 使用重写后的查询
+        messages: executorMessages,
+        systemPrompt: '',
+        userQuery: userQuery,
         enabledTools: intentTools.length > 0 ? intentTools : enabledToolNames,
-        maxIterations: intentContext?.maxIterations || 3,  // 使用意图推荐的迭代次数
-        intentContext  // 传入结构化意图上下文
+        maxIterations: intentContext?.maxIterations || (preCall.isCasual ? 1 : 5),
+        intentContext,
+        signal: abortController.signal
       })
+
+      if (result.aborted) {
+        console.log('[IPC:chat] Execution was aborted by user')
+        return {
+          success: true,
+          data: {
+            requestId: effectiveRequestId,
+            content: result.content || '已停止生成。',
+            aborted: true,
+            toolResults: result.state?.toolResults || [],
+            intentTools,
+            state: result.state,
+            debug: { steps: result.state?.steps }
+          }
+        }
+      }
 
       if (!result.success) {
         return {
           success: false,
           error: result.error,
           state: result.state,
+        }
+      }
+
+      // 若提供了 sessionId，自动保存本轮交互与 ReAct 思维记录到会话
+      if (sessionId) {
+        try {
+          const stepReacts = result.state?.steps || []
+          sm.appendMessage(sessionId, {
+            role: 'user',
+            content: userQuery,
+            time: new Date().toISOString()
+          })
+          sm.appendMessage(sessionId, {
+            role: 'assistant',
+            content: result.content,
+            time: new Date().toISOString(),
+            conversationId: payload.conversationId || `conv_${Date.now()}`
+          }, stepReacts)
+        } catch (sessErr) {
+          console.error('[IPC:chat] Failed to auto-save to session:', sessErr)
         }
       }
 
@@ -258,6 +409,10 @@ export function registerIPCHandlers(config = {}) {
           name: error?.name,
           message: error?.message,
         },
+      }
+    } finally {
+      if (effectiveRequestId) {
+        activeAbortControllers.delete(effectiveRequestId)
       }
     }
   })
@@ -483,14 +638,31 @@ export function registerIPCHandlers(config = {}) {
  */
 export function unregisterIPCHandlers() {
   console.log('[IPC] Unregistering handlers')
-  ipcMain.removeAllListeners('assistant:chat')
-  ipcMain.removeAllListeners('assistant:invoke-tool')
-  ipcMain.removeAllListeners('tool-execute')
-  ipcMain.removeAllListeners('assistant:list-models')
-  ipcMain.removeAllListeners('assistant:save-image')
-  ipcMain.removeAllListeners('assistant:list-tools')
-  ipcMain.removeAllListeners('assistant:analyze-intent')
-  ipcMain.removeAllListeners('record:update')
+  const channels = [
+    'assistant:chat',
+    'assistant:invoke-tool',
+    'tool-execute',
+    'assistant:list-models',
+    'assistant:save-image',
+    'assistant:list-tools',
+    'assistant:analyze-intent',
+    'record:update',
+    'sessions:list',
+    'sessions:get',
+    'sessions:create',
+    'sessions:save',
+    'sessions:delete',
+    'sessions:rename',
+    'sessions:migrate-legacy',
+    'core-memory:get',
+    'core-memory:update'
+  ]
+  for (const ch of channels) {
+    try {
+      ipcMain.removeHandler(ch)
+      ipcMain.removeAllListeners(ch)
+    } catch {}
+  }
 }
 
 function ensureFileExt(filePath, ext) {
@@ -566,9 +738,13 @@ async function saveImageToFile(src, filePath) {
 // 定义不同 baseURL 对应的 API Key 环境变量映射
 const API_KEY_MAP = {
   'https://dashscope.aliyuncs.com/compatible-mode/v1': 'DASHSCOPE_API_KEY_QWEN',
+  'https://dashscope.aliyuncs.com/api/v1': 'DASHSCOPE_API_KEY',
+  'https://llm-fxdsk6826w304s38.cn-beijing.maas.aliyuncs.com/compatible-mode/v1': 'DASHSCOPE_API_KEY',
   'http://127.0.0.1:8045/v1': 'OPENAI_API_KEY',
   'https://uni-api.cstcloud.cn/v1': 'DASHSCOPE_API_KEY_SCTCLOUD',
-  'https://api.openai.com/v1': 'OPENAI_API_KEY'
+  'https://api.openai.com/v1': 'OPENAI_API_KEY',
+  'https://api.longcat.chat/openai': 'LONGCAT_API_KEY',
+  'https://api.longcat.chat/openai/v1': 'LONGCAT_API_KEY'
 }
 
 /**
@@ -583,6 +759,11 @@ function getAPIKeyForBaseURL(baseURL) {
     return process.env[envVar]
   }
   
+  // 百炼相关端点优先支持 DASHSCOPE_API_KEY 或 DASHSCOPE_API_KEY_QWEN
+  if (baseURL?.includes('dashscope') || baseURL?.includes('maas.aliyuncs.com')) {
+    return process.env.DASHSCOPE_API_KEY || process.env.DASHSCOPE_API_KEY_QWEN || process.env.ANTI_DASHSCOPE_API_KEY || ''
+  }
+
   // 如果没有找到特定的 API Key，则回退到默认的 API Key
-  return process.env.ANTI_DASHSCOPE_API_KEY || process.env.DASHSCOPE_API_KEY || process.env.OPENAI_API_KEY || ''
+  return process.env.ANTI_DASHSCOPE_API_KEY || process.env.DASHSCOPE_API_KEY || process.env.DASHSCOPE_API_KEY_QWEN || process.env.OPENAI_API_KEY || ''
 }

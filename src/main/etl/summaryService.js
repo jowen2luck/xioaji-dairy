@@ -12,12 +12,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
 import { loadAndEnrichData, getSqlService } from '../data/index.js'
+import { bailianPoolManager, BAILIAN_AUTO_MODEL_ID, BAILIAN_MODELS_POOL } from '../llm/bailianPool.js'
 
 // ==================== 配置 ====================
 
 const DEFAULT_CONFIG = {
     baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    model: 'qwen3-max-2026-01-23',
+    model: 'bailian-auto',
     temperature: 0.7,
     summariesFile: 'summaries.json'
 }
@@ -26,15 +27,44 @@ const DEFAULT_CONFIG = {
 const API_KEY_MAP = {
     'https://dashscope.aliyuncs.com/compatible-mode/v1': 'DASHSCOPE_API_KEY_QWEN',
     'https://dashscope.aliyuncs.com/api/v1': 'DASHSCOPE_API_KEY',
-    'https://api.openai.com/v1': 'OPENAI_API_KEY'
+    'https://llm-fxdsk6826w304s38.cn-beijing.maas.aliyuncs.com/compatible-mode/v1': 'DASHSCOPE_API_KEY',
+    'https://uni-api.cstcloud.cn/v1': 'DASHSCOPE_API_KEY_SCTCLOUD',
+    'https://api.openai.com/v1': 'OPENAI_API_KEY',
+    'http://127.0.0.1:8045/v1': 'OPENAI_API_KEY',
+    'https://api.longcat.chat/openai': 'LONGCAT_API_KEY',
+    'https://api.longcat.chat/openai/v1': 'LONGCAT_API_KEY'
+}
+
+function getEnvValue(key) {
+    if (!key) return ''
+    try {
+        const envPath = path.join(process.cwd(), '.env')
+        if (fs.existsSync(envPath)) {
+            const content = fs.readFileSync(envPath, 'utf-8')
+            const match = content.match(new RegExp(`^${key}\\s*=\\s*(.*)$`, 'm'))
+            if (match && match[1]) {
+                return match[1].trim()
+            }
+        }
+    } catch {}
+    return process.env[key] || ''
 }
 
 function getAPIKeyForBaseURL(baseURL) {
-    const envVar = API_KEY_MAP[baseURL]
-    if (envVar && process.env[envVar]) {
-        return process.env[envVar]
+    if (!baseURL) return ''
+    const cleanUrl = String(baseURL).trim().replace(/\/+$/, '')
+    const envVar = API_KEY_MAP[cleanUrl] || API_KEY_MAP[cleanUrl + '/v1']
+    if (envVar) {
+        const val = getEnvValue(envVar)
+        if (val) return val
     }
-    return process.env.DASHSCOPE_API_KEY || process.env.OPENAI_API_KEY || ''
+    if (cleanUrl.includes('dashscope') || cleanUrl.includes('maas.aliyuncs.com')) {
+        return getEnvValue('DASHSCOPE_API_KEY') || getEnvValue('DASHSCOPE_API_KEY_QWEN') || getEnvValue('ANTI_DASHSCOPE_API_KEY') || ''
+    }
+    if (cleanUrl.includes('longcat')) {
+        return getEnvValue('LONGCAT_API_KEY')
+    }
+    return getEnvValue('DASHSCOPE_API_KEY') || getEnvValue('DASHSCOPE_API_KEY_QWEN') || getEnvValue('ANTI_DASHSCOPE_API_KEY') || getEnvValue('OPENAI_API_KEY') || ''
 }
 
 // ==================== Prompt 模板 ====================
@@ -178,15 +208,21 @@ function getGlobalAssistantConfig() {
 
 export class SummaryService {
     constructor(config = {}) {
-        const assistantCfg = getGlobalAssistantConfig()
-        const model = assistantCfg.selectedModel || DEFAULT_CONFIG.model
-        const baseURL = assistantCfg.selectedBaseURL || DEFAULT_CONFIG.baseURL
-        const temperature = assistantCfg.temperature !== undefined ? assistantCfg.temperature : DEFAULT_CONFIG.temperature
-
-        this.config = { ...DEFAULT_CONFIG, baseURL, model, temperature, ...config }
+        this.refreshConfig(config)
         this.summariesPath = path.join(app.getPath('userData'), this.config.summariesFile)
         this.summaries = this.loadSummaries()
         this.abortController = null
+    }
+
+    refreshConfig(config = {}) {
+        const assistantCfg = getGlobalAssistantConfig()
+        const etlCfg = assistantCfg.etl || {}
+        // 优先使用后台增强 (ETL) 中配置的 baseURL 和 model，确保与智能增强所用模型一致
+        const baseURL = etlCfg.baseURL || assistantCfg.selectedBaseURL || DEFAULT_CONFIG.baseURL
+        const model = etlCfg.model || assistantCfg.selectedModel || DEFAULT_CONFIG.model
+        const temperature = etlCfg.temperature !== undefined ? etlCfg.temperature : (assistantCfg.temperature !== undefined ? assistantCfg.temperature : DEFAULT_CONFIG.temperature)
+
+        this.config = { ...DEFAULT_CONFIG, baseURL, model, temperature, ...config }
     }
 
     abort() {
@@ -477,13 +513,13 @@ export class SummaryService {
 
     // ==================== LLM 调用 ====================
 
-    async callLLM(prompt, signal) {
+    async _callSingleLLM(prompt, targetModel, signal) {
         const apiKey = getAPIKeyForBaseURL(this.config.baseURL)
         if (!apiKey) {
             throw new Error('API key not found for baseURL: ' + this.config.baseURL)
         }
 
-        console.log(`[SummaryService] 🤖 Calling LLM ${this.config.model}...`)
+        console.log(`[SummaryService] 🤖 Calling LLM ${targetModel}...`)
 
         try {
             const response = await fetch(`${this.config.baseURL}/chat/completions`, {
@@ -493,7 +529,7 @@ export class SummaryService {
                     'Authorization': `Bearer ${apiKey}`
                 },
                 body: JSON.stringify({
-                    model: this.config.model,
+                    model: targetModel,
                     messages: [
                         {
                             role: 'system',
@@ -505,7 +541,7 @@ export class SummaryService {
                         }
                     ],
                     temperature: this.config.temperature,
-                    max_tokens: 4000,
+                    max_tokens: 8000,
                     stream: true
                 }),
                 signal
@@ -513,13 +549,17 @@ export class SummaryService {
 
             if (!response.ok) {
                 const errorText = await response.text()
-                throw new Error(`LLM API error: ${response.status} - ${errorText}`)
+                const err = new Error(`LLM API error: ${response.status} - ${errorText}`)
+                err.status = response.status
+                err.statusCode = response.status
+                throw err
             }
 
             const contentType = response.headers.get('content-type') || ''
             if (contentType.includes('text/event-stream')) {
                 let buffer = ''
                 let content = ''
+                let reasoningContent = ''
                 const flushLine = (line) => {
                     const trimmed = line.trim()
                     if (!trimmed || !trimmed.startsWith('data:')) return
@@ -534,6 +574,7 @@ export class SummaryService {
                     const choice = parsed.output?.choices?.[0] || parsed.choices?.[0]
                     const delta = choice?.delta || choice?.message || {}
                     if (delta.content) content += delta.content
+                    if (delta.reasoning_content) reasoningContent += delta.reasoning_content
                 }
                 const decoder = new TextDecoder('utf-8')
                 for await (const chunk of response.body) {
@@ -549,6 +590,9 @@ export class SummaryService {
                     for (const line of lines) {
                         flushLine(line)
                     }
+                }
+                if (!content && reasoningContent) {
+                    content = reasoningContent
                 }
                 if (!content) {
                     throw new Error('Empty response from LLM')
@@ -568,8 +612,52 @@ export class SummaryService {
             return content
 
         } catch (error) {
-            console.error('[SummaryService] LLM call failed:', error)
+            console.error('[SummaryService] LLM call failed:', error.message)
             throw error
+        }
+    }
+
+    async callLLM(prompt, signal) {
+        const isBailianAuto = this.config.model === BAILIAN_AUTO_MODEL_ID || this.config.model === 'bailian-auto'
+
+        if (isBailianAuto) {
+            const candidates = bailianPoolManager.getActiveCandidates()
+            if (candidates.length === 0) {
+                throw new Error('[SummaryService] 所有百炼聚合候选模型均已过期或额度耗尽')
+            }
+
+            let lastError = null
+            for (let i = 0; i < candidates.length; i++) {
+                const candidate = candidates[i]
+                console.log(`[SummaryService] 正在调用百炼候选模型 (${i + 1}/${candidates.length}): ${candidate.id}`)
+                try {
+                    return await this._callSingleLLM(prompt, candidate.id, signal)
+                } catch (err) {
+                    lastError = err
+                    if (signal?.aborted || err?.message?.includes('AbortError')) {
+                        throw err
+                    }
+                    if (bailianPoolManager.isDeprecatableError(err, err?.status || err?.statusCode)) {
+                        console.warn(`[SummaryService] 模型 ${candidate.id} 额度不足或异常 (${err.message})，自动标记废弃并顺延至下一模型...`)
+                        bailianPoolManager.markDeprecated(candidate.id, 'quota_exhausted', err.message)
+                        continue
+                    }
+                    throw err
+                }
+            }
+            throw new Error(`[SummaryService] 所有百炼可用候选模型均已尝试失败: ${lastError?.message}`)
+        }
+
+        try {
+            return await this._callSingleLLM(prompt, this.config.model, signal)
+        } catch (err) {
+            if (bailianPoolManager.isDeprecatableError(err, err?.status || err?.statusCode)) {
+                const inPool = BAILIAN_MODELS_POOL.find(m => m.id === this.config.model)
+                if (inPool) {
+                    bailianPoolManager.markDeprecated(this.config.model, 'quota_exhausted', err.message)
+                }
+            }
+            throw err
         }
     }
 
@@ -582,7 +670,7 @@ export class SummaryService {
         const dateRange = this.getWeekDateRange(year, week)
         console.log(`[SummaryService] Week date range: ${dateRange.start} to ${dateRange.end}`)
 
-        const { allowMissingData = false, signal } = options
+        const { allowMissingData = false, isHistorical = false, signal } = options
 
         if (!this.isPeriodComplete(dateRange.end)) {
             return {
@@ -608,7 +696,7 @@ export class SummaryService {
         console.log(`[SummaryService] Found ${weeklyRecords.length} records for week ${week}`)
 
         const missingDays = this.getMissingDays(weeklyRecords, dateRange.start, dateRange.end)
-        if (missingDays.length > 0 && !allowMissingData) {
+        if (missingDays.length > 0 && !allowMissingData && !isHistorical) {
             return {
                 requiresConfirm: true,
                 missing: {
@@ -673,7 +761,7 @@ export class SummaryService {
         const dateRange = this.getMonthDateRange(year, month)
         console.log(`[SummaryService] Month date range: ${dateRange.start} to ${dateRange.end}`)
 
-        const { allowMissingData = false, signal } = options
+        const { allowMissingData = false, isHistorical = false, signal } = options
 
         if (!this.isPeriodComplete(dateRange.end)) {
             return {
@@ -700,7 +788,7 @@ export class SummaryService {
 
         const missingDays = this.getMissingDays(monthlyRecords, dateRange.start, dateRange.end)
         const missingWeeks = this.getMissingWeeks(monthlyRecords, dateRange.start, dateRange.end)
-        if ((missingDays.length > 0 || missingWeeks.length > 0) && !allowMissingData) {
+        if ((missingDays.length > 0 || missingWeeks.length > 0) && !allowMissingData && !isHistorical) {
             return {
                 requiresConfirm: true,
                 missing: {
@@ -949,6 +1037,9 @@ export class SummaryService {
      * @returns {Object} - 生成结果统计
      */
     async autoGenerateSummaries(options = {}, eventCallback = () => { }) {
+        this.refreshConfig(options.config)
+        this.summaries = this.loadSummaries()
+
         const {
             generateWeekly = true,
             generateMonthly = true,
@@ -999,13 +1090,24 @@ export class SummaryService {
             const weeksNeedingUpdate = this.getWeeksNeedingSummary(allData)
             console.log(`[SummaryService] Found ${weeksNeedingUpdate.length} weeks needing summary update`)
 
-            for (const { year, week } of weeksNeedingUpdate) {
-                const dateRange = this.getWeekDateRange(year, week)
+            // 1. 区分已完成周期与未完成周期
+            const completedWeeks = []
+            for (const item of weeksNeedingUpdate) {
+                const dateRange = this.getWeekDateRange(item.year, item.week)
                 if (!this.isPeriodComplete(dateRange.end)) {
                     stats.incompleteSkipped++
-                    stats.incompletePeriods.weekly.push({ year, week })
-                    continue
+                    stats.incompletePeriods.weekly.push({ year: item.year, week: item.week })
+                } else {
+                    completedWeeks.push(item)
                 }
+            }
+
+            // 2. 识别“最后一周”（最新已完成周）。其余更早的周期全部视为历史归档周
+            const latestCompletedWeek = completedWeeks.length > 0 ? completedWeeks[completedWeeks.length - 1] : null
+
+            for (const { year, week } of completedWeeks) {
+                const dateRange = this.getWeekDateRange(year, week)
+                const isLatestWeek = latestCompletedWeek && (latestCompletedWeek.year === year && latestCompletedWeek.week === week)
 
                 const weeklyRecords = allData.filter(record => {
                     const recordDate = record.time.split('T')[0]
@@ -1013,16 +1115,26 @@ export class SummaryService {
                 })
 
                 const missingDays = this.getMissingDays(weeklyRecords, dateRange.start, dateRange.end)
-                if (missingDays.length > 0) {
-                    missing.weekly.push({ year, week, missingDays })
+
+                // 核心规则：缺卡断更拦截仅对【最后一周】生效！
+                // 前面的历史周默认已归档，不会再有新记录，直接生成
+                if (isLatestWeek && missingDays.length > 0 && !allowMissingData) {
+                    stats.incompleteSkipped++
+                    stats.incompletePeriods.weekly.push({ year, week, reason: 'latest_week_missing_days' })
+                    console.log(`[SummaryService] ⏭️ Skipped latest week ${year}-W${week} due to missing days:`, missingDays)
+                    continue
                 }
 
-                weeksToGenerate.push({ year, week })
+                weeksToGenerate.push({ year, week, isHistorical: !isLatestWeek })
             }
         }
 
         // 生成月总结（基于已生成的周总结）- 使用所有记录保持一致
         if (generateMonthly) {
+            const now = new Date()
+            const currentYear = now.getFullYear()
+            const currentMonth = now.getMonth() + 1
+
             // 收集所有涉及的月份
             const monthsMap = new Map()
             for (const record of allData) {
@@ -1037,7 +1149,13 @@ export class SummaryService {
                 monthsMap.get(key).push(record._id || record._meta_id)
             }
 
-            for (const [key, recordIds] of monthsMap) {
+            const sortedMonths = Array.from(monthsMap.entries()).sort((a, b) => {
+                const [y1, m1] = a[0].split('-').map(Number)
+                const [y2, m2] = b[0].split('-').map(Number)
+                return y1 !== y2 ? y1 - y2 : m1 - m2
+            })
+
+            for (const [key, recordIds] of sortedMonths) {
                 const [year, month] = key.split('-').map(Number)
                 const summaryId = `summary_monthly_${year}-${String(month).padStart(2, '0')}`
 
@@ -1048,6 +1166,12 @@ export class SummaryService {
                     continue
                 }
 
+                if (!this.needsUpdate(summaryId, recordIds)) {
+                    stats.monthlySkipped++
+                    continue
+                }
+
+                const isCurrentMonth = (year === currentYear && month === currentMonth)
                 const monthlyRecords = allData.filter(record => {
                     const recordDate = record.time.split('T')[0]
                     return recordDate >= dateRange.start && recordDate <= dateRange.end
@@ -1055,28 +1179,22 @@ export class SummaryService {
 
                 const missingDays = this.getMissingDays(monthlyRecords, dateRange.start, dateRange.end)
                 const missingWeeks = this.getMissingWeeks(monthlyRecords, dateRange.start, dateRange.end)
-                if (missingDays.length > 0 || missingWeeks.length > 0) {
-                    missing.monthly.push({ year, month, missingDays, missingWeeks })
+
+                // 核心规则：缺卡断更拦截仅对【当月总结】生效！
+                // 前面的历史月默认已归档，不会再有新记录，直接生成
+                if (isCurrentMonth && (missingDays.length > 0 || missingWeeks.length > 0) && !allowMissingData) {
+                    stats.incompleteSkipped++
+                    stats.incompletePeriods.monthly.push({ year, month, reason: 'current_month_missing_days' })
+                    console.log(`[SummaryService] ⏭️ Skipped current month ${year}-${month} due to missing data`)
+                    continue
                 }
 
-                if (this.needsUpdate(summaryId, recordIds)) {
-                    monthsToGenerate.push({ year, month })
-                } else {
-                    stats.monthlySkipped++
-                }
-            }
-        }
-
-        if ((missing.weekly.length > 0 || missing.monthly.length > 0) && !allowMissingData) {
-            return {
-                requiresConfirm: true,
-                missing,
-                incomplete: stats.incompletePeriods
+                monthsToGenerate.push({ year, month, isHistorical: !isCurrentMonth })
             }
         }
 
         if (generateWeekly) {
-            for (const { year, week } of weeksToGenerate) {
+            for (const { year, week, isHistorical } of weeksToGenerate) {
                 if (signal.aborted) {
                     console.log('[SummaryService] Weekly generation aborted.')
                     break
@@ -1096,7 +1214,7 @@ export class SummaryService {
                         }
                     })
 
-                    await this.generateWeeklySummary(year, week, { allowMissingData, signal })
+                    await this.generateWeeklySummary(year, week, { allowMissingData: isHistorical || allowMissingData, isHistorical, signal })
                     stats.weeklyGenerated++
                     console.log(`[SummaryService] Generated weekly summary: ${year}-W${week}`)
                 } catch (error) {
@@ -1107,7 +1225,7 @@ export class SummaryService {
         }
 
         if (generateMonthly) {
-            for (const { year, month } of monthsToGenerate) {
+            for (const { year, month, isHistorical } of monthsToGenerate) {
                 if (signal.aborted) {
                     console.log('[SummaryService] Monthly generation aborted.')
                     break
@@ -1123,7 +1241,7 @@ export class SummaryService {
                         }
                     })
 
-                    await this.generateMonthlySummary(year, month, { allowMissingData, signal })
+                    await this.generateMonthlySummary(year, month, { allowMissingData: isHistorical || allowMissingData, isHistorical, signal })
                     stats.monthlyGenerated++
                     console.log(`[SummaryService] Generated monthly summary: ${year}-${month}`)
                 } catch (error) {
@@ -1145,6 +1263,8 @@ let summaryServiceInstance = null
 export function getSummaryService(config) {
     if (!summaryServiceInstance) {
         summaryServiceInstance = new SummaryService(config)
+    } else {
+        summaryServiceInstance.refreshConfig(config)
     }
     return summaryServiceInstance
 }

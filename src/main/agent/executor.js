@@ -8,6 +8,9 @@
  * 3. 支持短路逻辑，闲聊问候直接返回不调用工具
  */
 
+import { globalToolOffloader } from './middleware/toolOffloader.js'
+import { getSkillRegistry } from './skills/index.js'
+
 /**
  * Agent 执行器类
  * 管理完整的对话流程：意图理解 → 工具调用 → 结果综合
@@ -80,14 +83,16 @@ export class AgentExecutor {
       userQuery = '',
       enabledTools = [],
       maxIterations = 3,
-      intentContext = null  // 新增：结构化意图上下文
+      intentContext = null,  // 新增：结构化意图上下文
+      signal = null          // 新增：中断信号
     } = params
 
     console.log('[AgentExecutor] Starting ReAct execution', {
       userQuery,
       enabledTools,
       maxIterations,
-      hasIntentContext: !!intentContext
+      hasIntentContext: !!intentContext,
+      hasSignal: !!signal
     })
 
     // 重置状态
@@ -111,7 +116,7 @@ export class AgentExecutor {
 
     try {
       // 1. 格式化消息
-      const formattedMessages = this.formatMessages(messages, systemPrompt)
+      const formattedMessages = this.formatMessages(messages, systemPrompt, intentContext)
       this.state.messageHistory = [...formattedMessages]
 
       // 2. 获取可用工具
@@ -122,13 +127,30 @@ export class AgentExecutor {
       let iteration = 0
 
       while (iteration < maxIterations) {
+        if (signal?.aborted) {
+          console.log('[AgentExecutor] Execution aborted by signal before iteration', iteration + 1)
+          this.state.steps.push({
+            iteration: iteration + 1,
+            action: 'aborted',
+            reasoning: '用户手动停止了生成',
+            timestamp: new Date().toISOString()
+          })
+          return {
+            success: false,
+            aborted: true,
+            content: '已停止生成。',
+            state: this.state,
+            duration: Date.now() - startTime
+          }
+        }
+
         iteration++
         console.log(`[AgentExecutor] === ReAct Iteration ${iteration}/${maxIterations} ===`)
         this.state.iteration = iteration
 
         // 3.1 调用 LLM（带工具）
         console.log(`[AgentExecutor] Iteration ${iteration}: Calling LLM with tools`)
-        const response = await this.executeWithTools(currentMessages, tools)
+        const response = await this.executeWithTools(currentMessages, tools, signal)
 
         // 3.2 检查是否有工具调用
         const toolCalls = this.extractToolCalls(response)
@@ -255,7 +277,7 @@ export class AgentExecutor {
         content: '请基于以上信息给出最终答案，不要再调用工具。'
       })
 
-      const finalResponse = await this.executeWithTools(currentMessages, [])
+      const finalResponse = await this.executeWithTools(currentMessages, [], signal)
       const finalContent = this.extractContent(finalResponse)
       const finalReasoningContent = finalResponse.reasoning_content  // 新增：最终推理过程
 
@@ -271,6 +293,19 @@ export class AgentExecutor {
       }
 
     } catch (error) {
+      if (signal?.aborted || error?.message?.includes('AbortError')) {
+        console.log('[AgentExecutor] Execution aborted by user')
+        this.emit('aborted', { timestamp: new Date().toISOString() })
+        return {
+          success: false,
+          aborted: true,
+          content: '已停止生成。',
+          state: this.state,
+          intentContext,
+          duration: Date.now() - startTime
+        }
+      }
+
       console.error('[AgentExecutor] Execution error:', error)
       this.state.errors.push({
         type: 'execution',
@@ -294,13 +329,15 @@ export class AgentExecutor {
    * 调用 LLM 并处理工具调用
    * @param {Array} messages - 消息列表
    * @param {Array} tools - 工具定义
+   * @param {AbortSignal} signal - 中断信号
    * @returns {Promise<Object>} LLM 响应
    */
-  async executeWithTools(messages, tools) {
+  async executeWithTools(messages, tools, signal = null) {
     try {
       console.log('[AgentExecutor] Calling LLM with params:', {
         messageCount: messages.length,
-        toolCount: tools?.length || 0
+        toolCount: tools?.length || 0,
+        hasSignal: !!signal
       })
 
       let response
@@ -319,7 +356,8 @@ export class AgentExecutor {
           tools: tools,
           temperature: this.config.temperature,
           top_p: this.config.top_p,
-          enableThinking: false  // 禁用深度思考（与函数调用不兼容）
+          enableThinking: false,  // 禁用深度思考（与函数调用不兼容）
+          signal
         })
         
         // 转换为 LangChain 格式
@@ -349,6 +387,7 @@ export class AgentExecutor {
           temperature: this.config.temperature,
           top_p: this.config.top_p,
           enableThinking: false,
+          signal,
           onContentDelta: this.config.streamFinal && this.config.eventEmitter
             ? (delta) => this.emit('final_delta', { delta })
             : undefined
@@ -383,6 +422,11 @@ export class AgentExecutor {
       return response
 
     } catch (error) {
+      if (signal?.aborted || error?.message?.includes('AbortError')) {
+        const abortErr = new Error('AbortError: The operation was aborted')
+        abortErr.name = 'AbortError'
+        throw abortErr
+      }
       console.error('[AgentExecutor] LLM call error:', error)
       throw new Error(`LLM 调用失败: ${error.message}`)
     }
@@ -462,58 +506,51 @@ export class AgentExecutor {
   formatMessages(messages, systemPrompt, intentContext) {
     const formatted = []
 
-    // 【核心改进】Agent 执行的强制性指令
-    // 这些指令确保 Agent 遵守正确的时间处理流程
-    const coreInstruction = `
-你是一个智能日记助手。
+    // 动态装配小鸡 Agent 专属技能组（替代原有的硬编码任务说明）
+    const skillRegistry = getSkillRegistry()
+    const activeToolNames = Array.from(this.toolRegistry?.tools?.keys() || [])
+    const skillsPrompt = skillRegistry.renderSkillsPrompt({
+      enabledTools: activeToolNames,
+      primaryIntent: intentContext?.primary_intent
+    })
 
-【思维链（Chain of Thought）】
-在回答用户之前，请务必执行以下思考步骤：
-1. **需求分析**：用户是在查询数据、修改记录还是闲聊？
-2. **工具决策**：如果是查询或修改，**必须**使用工具。不要依赖你的训练数据，因为你看不到用户的私人日记。
-3. **参数提取**：从用户输入中提取时间、关键词等参数。
-4. **行动执行**：调用相应的工具。
-
-【核心原则】
-1. **数据事实性**：严禁编造日记内容。所有分析必须基于 \`sql_analysis\` 或 \`query_records\` 等工具的返回结果。
-2. **时间严谨性**：如果用户提到相对时间（如"上周"、"昨天"、"最近"），**必须第一步调用 calendar_resolver 工具**获取精确的 ISO 日期范围。严禁自己估算日期。
-3. **循序渐进**：不要尝试在一个步骤中完成所有操作。先获取时间/元数据，拿到结果后再调用查询工具。
-4. **工具优先**：当用户询问"有没有"、"是多少"、"什么时候"时，倾向于先调用工具查询，而不是直接回答。
-5. **工具链路**：先用 \`metadata_explorer\` 核对人物/项目/标签的准确值，再用 \`query_records\` 或 \`sql_analysis\` 做检索与基础统计，最后才用 \`insight_analyst\` 做深度关联与规律分析。
-6. **边界清晰**：\`sql_analysis\` 只做客观统计；\`insight_analyst\` 只做模式与关联分析；\`metadata_explorer\` 只做元数据查找。
-7. **前置依赖**：\`sql_analysis\` 的 mood_distribution/energy_trend/content_type_ratio/life_composition 需要 AI 元数据；缺失时先提示需要运行 AI 元数据处理。
-`
-
-    // 注入意图上下文（如果有）
-    // 这能极大帮助 LLM 理解当前任务，而不需要翻阅历史
+    // 注入意图上下文（仅在非 direct 且有具体分析时注入，避免多余噪音）
     let intentPrompt = ''
-    if (intentContext) {
+    if (intentContext && intentContext.primary_intent !== 'direct' && intentContext.primary_intent !== 'casual') {
       intentPrompt = `
-【意图分析报告】
+【意图分析建议】
 - 原始查询: "${intentContext.original_query || ''}"
 - 独立查询: "${intentContext.standalone_query || ''}"
 - 识别意图: ${intentContext.primary_intent}
 - 推荐工具: ${intentContext.suggested_pipeline?.join(', ') || '无'}
 - 提取实体: ${JSON.stringify(intentContext.entities || {})}
-
-请参考上述分析结果，优先使用推荐的工具完成任务。
 `
     }
 
     // 添加系统提示词
-    const effectiveSystemPrompt = (systemPrompt || '') + coreInstruction + intentPrompt
+    const effectiveSystemPrompt = [systemPrompt, skillsPrompt, intentPrompt].filter(Boolean).join('\n\n')
 
-    if (!messages.some(m => m.role === 'system')) {
-      formatted.push({
-        role: 'system',
-        content: effectiveSystemPrompt
-      })
+    const firstSysIdx = messages.findIndex(m => m.role === 'system')
+    if (firstSysIdx === -1) {
+      if (effectiveSystemPrompt) {
+        formatted.push({
+          role: 'system',
+          content: effectiveSystemPrompt
+        })
+      }
+      formatted.push(...messages)
+    } else {
+      for (let i = 0; i < messages.length; i++) {
+        if (i === firstSysIdx) {
+          formatted.push({
+            role: 'system',
+            content: `${messages[i].content}\n\n${effectiveSystemPrompt}`
+          })
+        } else {
+          formatted.push(messages[i])
+        }
+      }
     }
-
-    // 【关键】直接添加传入的消息
-    // 注意：由于 IPC 层已经切断了历史，这里的 messages 通常只有 1-2 条
-    // 这个干净的消息列表确保 LLM 必须调用工具来获取信息
-    formatted.push(...messages)
 
     console.log('[AgentExecutor] formatMessages result:', {
       totalMessages: formatted.length,
@@ -594,9 +631,13 @@ export class AgentExecutor {
     // OpenAI API 要求：每个 tool_call 必须有对应的 tool 消息
     return toolResults.map(r => {
       const status = r.success ? '✓' : '✗'
-      const resultText = typeof r.result === 'string' 
-        ? r.result 
-        : JSON.stringify(r.result, null, 2)
+      
+      // 使用 ToolOffloader 处理大输出外置
+      const offloadRes = globalToolOffloader.process(r.name, r.result)
+      const displayData = offloadRes.content
+      const resultText = typeof displayData === 'string' 
+        ? displayData 
+        : JSON.stringify(displayData, null, 2)
       
       return {
         role: 'tool',

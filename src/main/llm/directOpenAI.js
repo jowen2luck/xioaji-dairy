@@ -5,14 +5,18 @@
 
 import https from 'https'
 import http from 'http'
+import { bailianPoolManager, BAILIAN_AUTO_MODEL_ID, BAILIAN_MODELS_POOL } from './bailianPool.js'
 
 // 定义不同 baseURL 对应的 API Key 环境变量映射
 const API_KEY_MAP = {
   'https://dashscope.aliyuncs.com/compatible-mode/v1': 'DASHSCOPE_API_KEY_QWEN',
   'https://dashscope.aliyuncs.com/api/v1': 'DASHSCOPE_API_KEY',  // 新增：百炼 API 端点
+  'https://llm-fxdsk6826w304s38.cn-beijing.maas.aliyuncs.com/compatible-mode/v1': 'DASHSCOPE_API_KEY',
   'https://uni-api.cstcloud.cn/v1': 'DASHSCOPE_API_KEY_SCTCLOUD',
   'http://127.0.0.1:8045/v1': 'OPENAI_API_KEY',
-  'https://api.openai.com/v1': 'OPENAI_API_KEY'
+  'https://api.openai.com/v1': 'OPENAI_API_KEY',
+  'https://api.longcat.chat/openai': 'LONGCAT_API_KEY',
+  'https://api.longcat.chat/openai/v1': 'LONGCAT_API_KEY'
 }
 
 /**
@@ -27,9 +31,15 @@ function getAPIKeyForBaseURL(baseURL) {
     return process.env[envVar]
   }
   
+  // 百炼相关端点优先支持 DASHSCOPE_API_KEY 或 DASHSCOPE_API_KEY_QWEN
+  if (baseURL?.includes('dashscope') || baseURL?.includes('maas.aliyuncs.com')) {
+    return process.env.DASHSCOPE_API_KEY || process.env.DASHSCOPE_API_KEY_QWEN || process.env.ANTI_DASHSCOPE_API_KEY || ''
+  }
+
   // 如果没有找到特定的 API Key，则回退到默认的 API Key
-  return process.env.ANTI_DASHSCOPE_API_KEY || process.env.DASHSCOPE_API_KEY || process.env.OPENAI_API_KEY || ''
+  return process.env.ANTI_DASHSCOPE_API_KEY || process.env.DASHSCOPE_API_KEY || process.env.DASHSCOPE_API_KEY_QWEN || process.env.OPENAI_API_KEY || ''
 }
+
 
 function isImageModel(model) {
   const m = String(model || '').toLowerCase()
@@ -130,7 +140,7 @@ function extractImageFromResponse(obj) {
  * @param {boolean} config.enableThinking - 启用深度思考（可选）
  * @returns {Promise<object>} - API 响应
  */
-export async function callOpenAIAPI(options) {
+async function _callOpenAIAPISingle(options) {
   const {
     baseURL: baseURLOrigin,
     model,
@@ -146,6 +156,7 @@ export async function callOpenAIAPI(options) {
     onToolCallsDelta,
     extraBody,
     stream,
+    signal,
   } = options
 
   // 获取 API 密钥
@@ -167,6 +178,10 @@ export async function callOpenAIAPI(options) {
     } else if (baseURLOrigin.includes('/compatible-mode')) {
       // 包含 /compatible-mode，需要添加 /v1
       url = new URL(baseURLOrigin + '/chat/completions')
+    } else if (baseURLOrigin.includes('/openai')) {
+      // 包含 /openai，直接拼接 /chat/completions
+      const base = baseURLOrigin.endsWith('/') ? baseURLOrigin.slice(0, -1) : baseURLOrigin
+      url = new URL(base + '/chat/completions')
     } else {
       // 其他情况，探测是不是以 / 结尾，然后添加 /v1/chat/completions
       const base = baseURLOrigin.endsWith('/') ? baseURLOrigin.slice(0, -1) : baseURLOrigin
@@ -175,8 +190,8 @@ export async function callOpenAIAPI(options) {
   } catch (e) {
     throw new Error(`Invalid baseURL: ${baseURLOrigin}, error: ${e.message}`)
   }
-  
-    const protocol = url.protocol === 'https:' ? https : http
+
+  const protocol = url.protocol === 'https:' ? https : http
 
   const streamEnabled = typeof stream === 'boolean'
     ? stream
@@ -188,6 +203,14 @@ export async function callOpenAIAPI(options) {
     temperature,
     top_p,
     stream: streamEnabled
+  }
+
+  // 安全配置 max_tokens，避免 API 网关按照模型最大上下文(8k/16k)预扣 Token 配额导致 402 拒止
+  const requestedMaxTokens = options.maxTokens || options.max_tokens || extraBody?.max_tokens
+  if (requestedMaxTokens) {
+    payload.max_tokens = requestedMaxTokens
+  } else if (!isImageModel(model)) {
+    payload.max_tokens = 2048
   }
 
   if (extraBody && typeof extraBody === 'object') {
@@ -212,6 +235,10 @@ export async function callOpenAIAPI(options) {
   // 内部函数：执行单次请求
   const executeRequest = () => {
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        return reject(new Error('AbortError: The operation was aborted'))
+      }
+
       const requestOptions = {
         method: 'POST',
         headers: {
@@ -221,7 +248,25 @@ export async function callOpenAIAPI(options) {
         timeout: 60000, // 增加到60秒超时
       }
 
-      const req = protocol.request(url, requestOptions, (res) => {
+      let req
+      const cleanupSignal = () => {
+        if (signal) {
+          signal.removeEventListener('abort', onAbort)
+        }
+      }
+
+      const onAbort = () => {
+        try {
+          if (req) req.destroy(new Error('AbortError: The operation was aborted'))
+        } catch {}
+        reject(new Error('AbortError: The operation was aborted'))
+      }
+
+      if (signal) {
+        signal.addEventListener('abort', onAbort, { once: true })
+      }
+
+      req = protocol.request(url, requestOptions, (res) => {
         let data = ''
         let buffer = ''
         let content = ''
@@ -294,11 +339,25 @@ export async function callOpenAIAPI(options) {
                   flushLine(line)
                 }
               }
-              const tool_calls = Array.from(toolCallsMap.values()).map(call => ({
-                id: call.id,
-                type: 'function',
-                function: call.function
-              }))
+              const tool_calls = Array.from(toolCallsMap.values()).map(tc => {
+                const fn = tc.function || tc
+                const argsStr = fn.arguments ?? tc.arguments ?? '{}'
+                let parsedArgs = {}
+                try {
+                  parsedArgs = JSON.parse(argsStr)
+                } catch {
+                  parsedArgs = { raw: argsStr }
+                }
+                return {
+                  id: tc.id,
+                  type: 'function',
+                  function: {
+                    name: fn.name || tc.name,
+                    arguments: argsStr
+                  },
+                  args: parsedArgs
+                }
+              })
               const image = isImageModel(model) ? extractImageFromText(content) : null
               resolve({
                 content,
@@ -337,7 +396,10 @@ export async function callOpenAIAPI(options) {
                 raw: response,
               })
             } else {
-              reject(new Error(`API error: ${res.statusCode} ${data}`))
+              const err = new Error(`API error: ${res.statusCode} ${data}`)
+              err.statusCode = res.statusCode
+              err.data = data
+              reject(err)
             }
           } catch (e) {
             reject(new Error(`Failed to parse response: ${e.message}`))
@@ -346,11 +408,13 @@ export async function callOpenAIAPI(options) {
       })
 
       req.on('timeout', () => {
+        cleanupSignal()
         req.destroy()
         reject(new Error('API request timeout'))
       })
 
       req.on('error', (error) => {
+        cleanupSignal()
         reject(new Error(`Network error: ${error.message}`))
       })
 
@@ -370,9 +434,9 @@ export async function callOpenAIAPI(options) {
       lastError = error;
       console.log(`[DirectOpenAI] Attempt ${attempt + 1} failed:`, error.message);
       
-      // 如果是最后一次尝试，或者错误不可重试，则抛出错误
-      if (attempt === maxRetries) {
-        throw new Error(`API request failed after ${maxRetries + 1} attempts: ${error.message}`);
+      // 如果是最后一次尝试，或者操作已被中断 (AbortError)，则立即退出重试
+      if (attempt === maxRetries || error?.message?.includes('AbortError')) {
+        throw error;
       }
       
       // 等待一段时间再重试
@@ -381,4 +445,58 @@ export async function callOpenAIAPI(options) {
   }
   
   throw new Error(`API request failed after ${maxRetries + 1} attempts: ${lastError.message}`);
+}
+
+/**
+ * 包装后的主入口：支持百炼模型池聚合（bailian-auto）与自动顺延容灾
+ */
+export async function callOpenAIAPI(options) {
+  const model = options?.model
+  const isBailianAuto = model === BAILIAN_AUTO_MODEL_ID || model === 'bailian-auto'
+
+  if (isBailianAuto) {
+    const candidates = bailianPoolManager.getActiveCandidates()
+    if (candidates.length === 0) {
+      throw new Error('[BailianPool] 所有百炼聚合候选模型均已过期或额度耗尽，请检查账户或重置模型池')
+    }
+
+    let lastError = null
+    for (let i = 0; i < candidates.length; i++) {
+      const candidate = candidates[i]
+      console.log(`[BailianPool] 正在调用百炼候选模型 (${i + 1}/${candidates.length}): ${candidate.id}`)
+      try {
+        const result = await _callOpenAIAPISingle({
+          ...options,
+          model: candidate.id
+        })
+        return result
+      } catch (err) {
+        lastError = err
+        if (options.signal?.aborted || err?.message?.includes('AbortError')) {
+          throw err
+        }
+        if (bailianPoolManager.isDeprecatableError(err, err?.statusCode)) {
+          console.warn(`[BailianPool] 模型 ${candidate.id} 触发废弃条件 (${err.message})，自动标记废弃并顺延至下一模型...`)
+          bailianPoolManager.markDeprecated(candidate.id, 'quota_exhausted', err.message)
+          continue
+        }
+        throw err
+      }
+    }
+    throw new Error(`[BailianPool] 所有百炼可用候选模型均已尝试失败: ${lastError?.message}`)
+  }
+
+  // 单独指定模型的情况
+  try {
+    return await _callOpenAIAPISingle(options)
+  } catch (err) {
+    if (bailianPoolManager.isDeprecatableError(err, err?.statusCode) && model) {
+      const inPool = BAILIAN_MODELS_POOL.find(m => m.id === model)
+      if (inPool) {
+        console.warn(`[BailianPool] 百炼模型 ${model} 额度不足或异常，同步标记废弃: ${err.message}`)
+        bailianPoolManager.markDeprecated(model, 'quota_exhausted', err.message)
+      }
+    }
+    throw err
+  }
 }

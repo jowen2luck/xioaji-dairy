@@ -1,5 +1,5 @@
 <template>
-  <n-switch v-model:value="isDark" size="medium" @update:value="onToggle">
+  <n-switch v-model:value="isDark" size="small" @update:value="onToggle">
     <template #checked>
       🌙
     </template>
@@ -29,6 +29,6 @@ function onToggle(val) {
 
 <style scoped>
 .n-switch {
-  margin-right: 8px;
+  display: flex;
 }
 </style>

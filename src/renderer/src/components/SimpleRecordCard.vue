@@ -21,6 +21,19 @@
           {{ formatTime(record.time) }}
         </span>
       </div>
+      <div class="header-right">
+        <n-button
+          text
+          size="small"
+          class="copy-btn"
+          @click.stop="copyOriginalText"
+          title="复制原文"
+        >
+          <template #icon>
+            <n-icon :component="CopyOutline" />
+          </template>
+        </n-button>
+      </div>
     </div>
 
     <!-- 核心内容区: 正文 -->
@@ -43,13 +56,32 @@
 import { computed } from 'vue'
 import { formatDistanceToNow } from 'date-fns'
 import { zhCN } from 'date-fns/locale'
+import { useMessage, NTag, NButton, NIcon } from 'naive-ui'
 import MarkdownRenderer from './MarkdownRenderer.vue'
-import { TimeOutline } from '@vicons/ionicons5'
+import { TimeOutline, CopyOutline } from '@vicons/ionicons5'
+import { copyTextToClipboard, extractPlainText } from '../utils/clipboard.js'
 
 const props = defineProps({
   record: { type: Object, required: true },
   compact: { type: Boolean, default: false }
 })
+
+const message = useMessage()
+
+const copyOriginalText = async () => {
+  const rawContent = props.record.ganshou || props.record.content || ''
+  const plainText = extractPlainText(rawContent)
+  if (!plainText) {
+    message?.warning('日记内容为空，无可复制内容')
+    return
+  }
+  const success = await copyTextToClipboard(plainText)
+  if (success) {
+    message?.success('已复制日记原文')
+  } else {
+    message?.error('复制失败，请重试')
+  }
+}
 
 const cardStyle = computed(() => ({
   // 动态样式可选
@@ -124,6 +156,22 @@ const formatTime = (timeStr) => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+}
+
+.copy-btn {
+  opacity: 0.6;
+  transition: all 0.2s ease;
+}
+
+.copy-btn:hover {
+  opacity: 1;
+  transform: scale(1.1);
+  color: var(--accent-color, #6366f1);
 }
 
 .separator {

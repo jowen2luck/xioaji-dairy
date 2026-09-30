@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, Menu } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import { join } from 'node:path'
@@ -12,6 +12,9 @@ import { loadAndEnrichData, saveData as saveDataETL } from './data/index.js'
 
 // LLM ETL 增强引擎
 import { registerETLHandlers, setMainWindow } from './etl/index.js'
+
+// Target Architecture IPC Adapters (new)
+import { registerNewIPCHandlers } from './adapters/ipc/index.js'
 
 
 
@@ -31,8 +34,9 @@ process.env.VITE_PUBLIC = process.env.VITE_DEV_SERVER_URL
   ? path.join(process.env.DIST_ELECTRON, '../public')
   : process.env.DIST
 
-// 加载环境变量
-require('dotenv').config()
+// 加载环境变量（配置 override: true，确保优先使用项目内最新 .env 配置，防止被系统旧残留环境变量覆盖）
+const envPath = path.resolve(process.cwd(), '.env')
+require('dotenv').config({ path: envPath, override: true })
 
 // 删除或注释原有的 VITE_DEV_SERVER_URL 判断逻辑
 // if (process.env.VITE_DEV_SERVER_URL) {
@@ -111,11 +115,16 @@ ipcMain.on('settings:delete-sync', (event, key) => {
 })
 
 async function createWindow() {
+  const iconPath = fs.existsSync(path.join(__dirname, '../../resources/icon.png'))
+    ? path.join(__dirname, '../../resources/icon.png')
+    : path.join(process.env.VITE_PUBLIC, 'favicon.ico')
+
   win = new BrowserWindow({
-    title: 'Main window',
-    icon: path.join(process.env.VITE_PUBLIC, 'favicon.ico'),
+    title: '小鸡日记',
+    icon: iconPath,
     width: 1400,
     height: 900,
+    autoHideMenuBar: true,
     webPreferences: {
       preload,
       // Warning: Enable nodeIntegration and disable contextIsolation is not secure in production
@@ -126,6 +135,10 @@ async function createWindow() {
       webviewTag: true,
     },
   })
+
+  // 彻底移除顶部原生菜单功能栏
+  win.setMenu(null)
+  Menu.setApplicationMenu(null)
 
   // 设置 ETL 窗口引用
   setMainWindow(win)
@@ -171,7 +184,21 @@ app.whenReady().then(() => {
   registerIPCHandlers()
   // 注册 LLM ETL 处理器
   registerETLHandlers()
+  // 注册目标架构 IPC 适配器 (new)
+  registerNewIPCHandlers()
   createWindow()
+
+  // 后台静默预热：非阻塞加载本地向量库与模型
+  setTimeout(async () => {
+    try {
+      const { initVectorSearch } = await import('./tools/index.js')
+      if (typeof initVectorSearch === 'function') {
+        await initVectorSearch()
+      }
+    } catch (e) {
+      console.warn('[VectorDB] Background warm-up notice:', e.message)
+    }
+  }, 1500)
 })
 
 app.on('window-all-closed', () => {
@@ -233,6 +260,15 @@ ipcMain.handle('save-data', async (event, newData) => {
     // 数据更新后，清空向量数据库缓存，下次检索时重建
     const { clearVectorCache } = await import('./tools/searchRecords.js')
     clearVectorCache()
+
+    // 广播给所有窗口，确保日记管理与复盘等页面自动刷新
+    try {
+      BrowserWindow.getAllWindows().forEach((win) => {
+        if (!win.isDestroyed()) {
+          win.webContents.send('journal:data-changed', { result })
+        }
+      })
+    } catch {}
     
     return result
   } catch (error) {

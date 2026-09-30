@@ -64,13 +64,28 @@
             </div>
           </template>
           
+          <!-- Copy Original Button -->
+          <n-button
+            v-if="!isEditing"
+            text
+            size="small"
+            class="header-action-btn copy-btn"
+            @click.stop="copyOriginalText"
+            title="复制原文"
+          >
+            <template #icon>
+              <n-icon :component="CopyOutline" />
+            </template>
+          </n-button>
+          
           <!-- Edit Toggle Button -->
           <n-button
             v-if="!isEditing"
             text
             size="small"
+            class="header-action-btn"
             @click="startEdit"
-            title="Edit Record"
+            title="编辑日记"
           >
             <template #icon>
               <n-icon :component="CreateOutline" />
@@ -384,8 +399,9 @@ import {
   SparklesOutline, FlashOutline, TimeOutline, FolderOpenOutline,
   EyeOutline, LocationOutline, BodyOutline, ChevronDownOutline as ChevronDown, 
   ChevronUpOutline as ChevronUp, CreateOutline, CloseOutline, CheckmarkOutline,
-  AddOutline, TrashOutline
+  AddOutline, TrashOutline, CopyOutline
 } from '@vicons/ionicons5'
+import { copyTextToClipboard, extractPlainText } from '../utils/clipboard.js'
 
 const props = defineProps({
   record: { type: Object, required: true },
@@ -401,6 +417,21 @@ const showPsychology = ref(false)
 const isEditing = ref(false)
 const editForm = ref({})
 const isSaving = ref(false)
+
+const copyOriginalText = async () => {
+  const rawContent = props.record.ganshou || props.record.content || ''
+  const plainText = extractPlainText(rawContent)
+  if (!plainText) {
+    message?.warning('日记内容为空，无可复制内容')
+    return
+  }
+  const success = await copyTextToClipboard(plainText)
+  if (success) {
+    message?.success('已复制日记原文')
+  } else {
+    message?.error('复制失败，请重试')
+  }
+}
 
 const meta = computed(() => props.record._ai_meta || {})
 
@@ -654,7 +685,23 @@ const saveEdit = async () => {
 
 .header-right {
   display: flex;
-  gap: 12px;
+  align-items: center;
+  gap: 10px;
+}
+
+.header-action-btn {
+  opacity: 0.65;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.header-action-btn:hover {
+  opacity: 1;
+  transform: scale(1.1);
+}
+
+.copy-btn:hover {
+  color: var(--accent-color, #3b82f6);
 }
 
 .stat-pill {

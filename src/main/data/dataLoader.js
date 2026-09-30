@@ -13,9 +13,12 @@ import path from 'node:path'
 import { app } from 'electron'
 import { LLMEnricher } from '../etl/llmEnricher.js'
 import { enrichRecord, cleanDataForSave } from '../../utils/diary-plugin/index.js'
+export { enrichRecord }
 
 // 数据存储路径
-const dataPath = path.join(app.getPath('userData'), 'appData.json')
+const dataPath = (app && typeof app.getPath === 'function')
+  ? path.join(app.getPath('userData'), 'appData.json')
+  : path.join(process.env.APPDATA || process.cwd(), 'daily_log_vue', 'appData.json')
 
 /**
  * 批量加载并增强数据
@@ -181,7 +184,7 @@ export async function updateRecord(id, updates, aiMetaUpdates = null) {
     }
     
     // Step 3: Apply raw field updates (only allowed fields)
-    const allowedRawFields = ['ganshou', 'time']
+    const allowedRawFields = ['ganshou', 'time', 'shanggexiangmu', 'chixushijian']
     
     const updatedRecord = { ...rawData[recordIndex] }
     
@@ -198,6 +201,12 @@ export async function updateRecord(id, updates, aiMetaUpdates = null) {
     fs.writeFileSync(dataPath, JSON.stringify(rawData, null, 2))
     console.log(`[DataLoader] Successfully updated raw record ${id}`)
     
+    // 清除向量索引缓存以保证搜索即时同步
+    try {
+      const { clearVectorCache } = await import('../tools/searchRecords.js')
+      clearVectorCache()
+    } catch {}
+
     // Step 5: Enrich record with _meta_ fields
     let enrichedRecord = enrichRecord(updatedRecord)
     
@@ -233,6 +242,52 @@ export async function updateRecord(id, updates, aiMetaUpdates = null) {
     }
   } catch (error) {
     console.error('[DataLoader] Error updating record:', error)
+    return {
+      success: false,
+      error: error.message
+    }
+  }
+}
+
+/**
+ * 删除单条记录
+ * @param {string} id - 记录 ID
+ * @returns {Promise<{success: boolean, deletedRecord?: Object, error?: string}>}
+ */
+export async function deleteRecord(id) {
+  try {
+    console.log(`[DataLoader] Deleting record ${id}`)
+    if (!fs.existsSync(dataPath)) {
+      return { success: false, error: 'Data file not found' }
+    }
+
+    const jsonData = fs.readFileSync(dataPath, 'utf-8')
+    if (jsonData.length === 0) {
+      return { success: false, error: 'Empty data file' }
+    }
+
+    const rawData = JSON.parse(jsonData)
+    const recordIndex = rawData.findIndex(r => r._id === id)
+    if (recordIndex === -1) {
+      return { success: false, error: `Record with ID ${id} not found` }
+    }
+
+    const deletedRecord = rawData.splice(recordIndex, 1)[0]
+    fs.writeFileSync(dataPath, JSON.stringify(rawData, null, 2))
+    console.log(`[DataLoader] Successfully deleted record ${id}`)
+
+    // 清除向量索引缓存以保证搜索即时同步
+    try {
+      const { clearVectorCache } = await import('../tools/searchRecords.js')
+      clearVectorCache()
+    } catch {}
+
+    return {
+      success: true,
+      deletedRecord
+    }
+  } catch (error) {
+    console.error('[DataLoader] Error deleting record:', error)
     return {
       success: false,
       error: error.message

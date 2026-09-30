@@ -8,7 +8,7 @@ import { exportJsonToFile } from './exporter.js'
 import { enrichRecord, cleanDataForSave } from './formatter.js'
 
 // ======================== 校验 ========================
-import { validateRecord, validateBatch } from './validator.js'
+import { validateRecord, validateBatch, normalizeRawRecord, parseDateValue } from './validator.js'
 
 // ======================== 统一 API ========================
 
@@ -27,6 +27,8 @@ export const DiaryPlugin = {
   // 校验
   validateRecord,
   validateBatch,
+  normalizeRawRecord,
+  parseDateValue,
 }
 
 export {
@@ -37,4 +39,6 @@ export {
   cleanDataForSave,
   validateRecord,
   validateBatch,
+  normalizeRawRecord,
+  parseDateValue,
 }

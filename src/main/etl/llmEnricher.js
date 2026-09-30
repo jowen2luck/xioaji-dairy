@@ -13,6 +13,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { app } from 'electron'
+import { bailianPoolManager, BAILIAN_AUTO_MODEL_ID, BAILIAN_MODELS_POOL } from '../llm/bailianPool.js'
 
 // ==================== Schema 定义（四维度结构） ====================
 
@@ -445,7 +446,9 @@ export class LLMEnricher {
      * @returns {Object|null} - AI 元数据对象，如果不存在返回 null
      */
     getCachedMetadata(hash) {
-        return this.cache.items[hash]?.data || null
+        const item = this.cache.items[hash]
+        if (!item) return null
+        return item.data || item
     }
 
     /**
@@ -526,17 +529,17 @@ export class LLMEnricher {
         return true
     }
 
-    async callLLM(prompt, attempt = 1) {
-        const maxRetries = 4
+    async _callSingleLLM(prompt, targetModel, attempt = 1) {
+        const maxRetries = 2
         const baseDelay = 1000
 
-        const apiKey = getAPIKeyForBaseURL(this.config.baseURL)
+        const apiKey = this.config.apiKey || getAPIKeyForBaseURL(this.config.baseURL)
         if (!apiKey) {
             throw new Error('API key not found for baseURL: ' + this.config.baseURL)
         }
 
         try {
-            console.log(`[LLMEnricher] 🤖 Calling LLM ${this.config.model} (attempt ${attempt}/${maxRetries})`)
+            console.log(`[LLMEnricher] 🤖 Calling LLM ${targetModel} (attempt ${attempt}/${maxRetries + 1})`)
 
             const response = await fetch(`${this.config.baseURL}/chat/completions`, {
                 method: 'POST',
@@ -545,7 +548,7 @@ export class LLMEnricher {
                     'Authorization': `Bearer ${apiKey}`
                 },
                 body: JSON.stringify({
-                    model: this.config.model,
+                    model: targetModel,
                     messages: [
                         {
                             role: 'system',
@@ -565,12 +568,14 @@ export class LLMEnricher {
             if (!response.ok) {
                 const errorText = await response.text()
                 const error = new Error(`LLM API error: ${response.status} - ${errorText}`)
+                error.status = response.status
+                error.statusCode = response.status
 
-                if (this.isRetriableError(error, response.status) && attempt < maxRetries) {
+                if (this.isRetriableError(error, response.status) && !bailianPoolManager.isDeprecatableError(error, response.status) && attempt <= maxRetries) {
                     const delay = baseDelay * Math.pow(2, attempt - 1)
-                    console.warn(`[LLMEnricher] ⚠️ Retry ${attempt}/${maxRetries} after ${delay}ms (status: ${response.status})`)
+                    console.warn(`[LLMEnricher] ⚠️ Retry ${attempt}/${maxRetries + 1} after ${delay}ms (status: ${response.status})`)
                     await new Promise(resolve => setTimeout(resolve, delay))
-                    return this.callLLM(prompt, attempt + 1)
+                    return this._callSingleLLM(prompt, targetModel, attempt + 1)
                 }
 
                 throw error
@@ -636,14 +641,55 @@ export class LLMEnricher {
             return JSON.parse(cleanedContent)
 
         } catch (error) {
-            if (this.isRetriableError(error, null) && attempt < maxRetries) {
+            if (this.isRetriableError(error, null) && !bailianPoolManager.isDeprecatableError(error) && attempt <= maxRetries) {
                 const delay = baseDelay * Math.pow(2, attempt - 1)
-                console.warn(`[LLMEnricher] ⚠️ Network error, retry ${attempt}/${maxRetries} after ${delay}ms: ${error.message}`)
+                console.warn(`[LLMEnricher] ⚠️ Network error, retry ${attempt}/${maxRetries + 1} after ${delay}ms: ${error.message}`)
                 await new Promise(resolve => setTimeout(resolve, delay))
-                return this.callLLM(prompt, attempt + 1)
+                return this._callSingleLLM(prompt, targetModel, attempt + 1)
             }
 
             throw error
+        }
+    }
+
+    async callLLM(prompt) {
+        const isBailianAuto = this.config.model === BAILIAN_AUTO_MODEL_ID || this.config.model === 'bailian-auto'
+
+        if (isBailianAuto) {
+            const candidates = bailianPoolManager.getActiveCandidates()
+            if (candidates.length === 0) {
+                throw new Error('[LLMEnricher] 所有百炼聚合候选模型均已过期或额度耗尽')
+            }
+
+            let lastError = null
+            for (let i = 0; i < candidates.length; i++) {
+                const candidate = candidates[i]
+                console.log(`[LLMEnricher] 正在调用百炼候选模型 (${i + 1}/${candidates.length}): ${candidate.id}`)
+                try {
+                    return await this._callSingleLLM(prompt, candidate.id)
+                } catch (err) {
+                    lastError = err
+                    if (bailianPoolManager.isDeprecatableError(err, err?.status || err?.statusCode)) {
+                        console.warn(`[LLMEnricher] 模型 ${candidate.id} 额度不足或异常 (${err.message})，自动标记废弃并顺延至下一模型...`)
+                        bailianPoolManager.markDeprecated(candidate.id, 'quota_exhausted', err.message)
+                        continue
+                    }
+                    throw err
+                }
+            }
+            throw new Error(`[LLMEnricher] 所有百炼可用候选模型均已尝试失败: ${lastError?.message}`)
+        }
+
+        try {
+            return await this._callSingleLLM(prompt, this.config.model)
+        } catch (err) {
+            if (bailianPoolManager.isDeprecatableError(err, err?.status || err?.statusCode)) {
+                const inPool = BAILIAN_MODELS_POOL.find(m => m.id === this.config.model)
+                if (inPool) {
+                    bailianPoolManager.markDeprecated(this.config.model, 'quota_exhausted', err.message)
+                }
+            }
+            throw err
         }
     }
 
@@ -742,6 +788,11 @@ export class LLMEnricher {
     async enrich(records, options = {}) {
         const { forceRefresh = false } = options
 
+        if (this.processing) {
+            console.warn('[LLMEnricher] Already processing, skipping duplicate enrich request.')
+            return { alreadyRunning: true }
+        }
+
         this.stats = {
             total: records.length,
             processed: 0,
@@ -781,7 +832,9 @@ export class LLMEnricher {
 
     getMetadata(record) {
         const hash = this.computeRecordHash(record)
-        return this.cache.items[hash]?.data || null
+        const item = this.cache.items[hash]
+        if (!item) return null
+        return item.data || item
     }
 
     enrichRecords(records) {
@@ -793,9 +846,12 @@ export class LLMEnricher {
 
     getProgress() {
         return {
-            ...this.stats,
-            queueLength: this.queue.length,
-            processing: this.processing
+            total: this.stats?.total || 0,
+            processed: this.stats?.processed || 0,
+            cached: this.stats?.cached || 0,
+            failed: this.stats?.failed || 0,
+            queueLength: this.queue ? this.queue.length : 0,
+            processing: !!this.processing
         }
     }
 
@@ -853,14 +909,43 @@ export class LLMEnricher {
 
 const API_KEY_MAP = {
     'https://dashscope.aliyuncs.com/compatible-mode/v1': 'DASHSCOPE_API_KEY_QWEN',
+    'https://dashscope.aliyuncs.com/api/v1': 'DASHSCOPE_API_KEY',
+    'https://llm-fxdsk6826w304s38.cn-beijing.maas.aliyuncs.com/compatible-mode/v1': 'DASHSCOPE_API_KEY',
     'https://uni-api.cstcloud.cn/v1': 'DASHSCOPE_API_KEY_SCTCLOUD',
-    'https://api.openai.com/v1': 'OPENAI_API_KEY'
+    'https://api.openai.com/v1': 'OPENAI_API_KEY',
+    'http://127.0.0.1:8045/v1': 'OPENAI_API_KEY',
+    'https://api.longcat.chat/openai': 'LONGCAT_API_KEY',
+    'https://api.longcat.chat/openai/v1': 'LONGCAT_API_KEY'
+}
+
+function getEnvValue(key) {
+    if (!key) return ''
+    try {
+        const envPath = path.join(process.cwd(), '.env')
+        if (fs.existsSync(envPath)) {
+            const content = fs.readFileSync(envPath, 'utf-8')
+            const match = content.match(new RegExp(`^${key}\\s*=\\s*(.*)$`, 'm'))
+            if (match && match[1]) {
+                return match[1].trim()
+            }
+        }
+    } catch {}
+    return process.env[key] || ''
 }
 
 function getAPIKeyForBaseURL(baseURL) {
-    const envVar = API_KEY_MAP[baseURL]
-    if (envVar && process.env[envVar]) {
-        return process.env[envVar]
+    if (!baseURL) return ''
+    const cleanUrl = String(baseURL).trim().replace(/\/+$/, '')
+    const envVar = API_KEY_MAP[cleanUrl] || API_KEY_MAP[cleanUrl + '/v1']
+    if (envVar) {
+        const val = getEnvValue(envVar)
+        if (val) return val
     }
-    return process.env.DASHSCOPE_API_KEY || process.env.OPENAI_API_KEY || ''
+    if (cleanUrl.includes('dashscope') || cleanUrl.includes('maas.aliyuncs.com')) {
+        return getEnvValue('DASHSCOPE_API_KEY') || getEnvValue('DASHSCOPE_API_KEY_QWEN') || getEnvValue('ANTI_DASHSCOPE_API_KEY') || ''
+    }
+    if (cleanUrl.includes('longcat')) {
+        return getEnvValue('LONGCAT_API_KEY')
+    }
+    return getEnvValue('DASHSCOPE_API_KEY') || getEnvValue('DASHSCOPE_API_KEY_QWEN') || getEnvValue('OPENAI_API_KEY') || ''
 }

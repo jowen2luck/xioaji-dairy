@@ -79,6 +79,13 @@ export function registerETLHandlers() {
       
       // 获取 ETL 引擎
       const enricher = getEnricher(config)
+
+      if (enricher.processing) {
+        return {
+          success: false,
+          error: 'ETL 任务正在后台处理中，请勿重复启动'
+        }
+      }
       
       // 启动异步处理（不阻塞）
       enricher.enrich(records)

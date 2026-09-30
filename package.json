@@ -1,7 +1,7 @@
 {
   "name": "daily_log_vue",
   "version": "1.0.0",
-  "description": "An Electron application with Vue",
+  "description": "小鸡日记 - 陪伴你的智能生活记录小助手",
   "main": "./out/main/index.js",
   "author": "example.com",
   "homepage": "https://electron-vite.org",
@@ -15,7 +15,10 @@
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "npm run build && electron-builder --mac",
-    "build:linux": "npm run build && electron-builder --linux"
+    "build:linux": "npm run build && electron-builder --linux",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
@@ -52,6 +55,7 @@
     "eslint-plugin-vue": "^10.4.0",
     "prettier": "^3.6.2",
     "vite": "^7.1.6",
+    "vitest": "^4.1.10",
     "vue": "^3.5.21",
     "vue-eslint-parser": "^10.2.0"
   }

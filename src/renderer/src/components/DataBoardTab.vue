@@ -3,11 +3,12 @@
     <!-- 固定顶部控制栏 -->
     <div class="fixed-header">
       <div class="controls">
-        <n-card style="width: 100%">
+        <n-card style="width: 100%" size="small" :content-style="{ padding: '8px 12px' }">
           <FilterBar
             :project-options="projectOptions"
             :value="{ query: searchQuery, project: projectFilter, dateRange }"
             @update:value="onFilterUpdate"
+            @create="openCreateDrawer"
             @import="importData"
             @reset="resetFilters"
             @etl-enhance="startETLEnhancement"
@@ -72,7 +73,18 @@
         <div class="main-column">
           <!-- 记录列表 -->
           <n-spin :show="loading">
-            <n-empty v-if="filteredData.length === 0" description="没有找到匹配的记录" />
+            <!-- 小鸡专属空状态 -->
+            <div v-if="filteredData.length === 0" class="xiaoji-empty-state">
+              <div class="empty-icon-box">
+                <img :src="logoImg" alt="小鸡" class="empty-avatar-img" />
+              </div>
+              <h3 class="empty-title">小鸡这里还没有找到日记哦 🐥</h3>
+              <p class="empty-desc">记录每一个微小但发光的瞬间，点击下方或顶部“记一笔”开始第一篇手账吧！</p>
+              <n-button type="primary" round class="empty-action-btn" @click="openCreateDrawer">
+                <template #icon><span style="font-size: 14px;">🐥</span></template>
+                记一笔
+              </n-button>
+            </div>
             <div v-else class="records-list">
               <div v-for="(item, index) in paginatedData" :key="item._id || index" class="record-item">
                 <!-- 总结卡片 -->
@@ -97,6 +109,7 @@
                   :clickable="false"
                   @click="handleRecordClick"
                   @tag-click="handleTagClick"
+                  @edit="openEditDrawer"
                 />
               </div>
             </div>
@@ -154,6 +167,13 @@
         </n-space>
       </div>
     </div>
+
+    <!-- 统一日记编辑/新建抽屉 -->
+    <JournalEditorDrawer
+      v-model:show="showJournalDrawer"
+      :record="drawerRecord"
+      @saved="refreshDataSilently"
+    />
   </div>
 </template>
 
@@ -161,6 +181,7 @@
 import { ref, computed, onMounted, onUnmounted, h } from 'vue'
 import { useDialog } from 'naive-ui'
 import FilterBar from './FilterBar.vue'
+import JournalEditorDrawer from './journal/JournalEditorDrawer.vue'
 import RecordCard from './RecordCard.vue'
 import EnhancedRecordCard from './EnhancedRecordCard.vue'
 import SummaryCard from './chronicle/SummaryCard.vue'
@@ -168,6 +189,7 @@ import FlashbackCard from './FlashbackCard.vue'
 import SerendipityCard from './SerendipityCard.vue'
 import QuickStatsCard from './QuickStatsCard.vue'
 import { loadConfig } from '../config/assistant.ts'
+import logoImg from '../assets/logo.png'
 
 // Props
 const props = defineProps({
@@ -194,6 +216,24 @@ const message = ref(null)
 const loading = ref(false)
 const currentPage = ref(1)
 const pageSize = ref(loadConfig().pagination.pageSize)
+
+// 统一日记抽屉状态
+const showJournalDrawer = ref(false)
+const drawerRecord = ref(null)
+
+const openCreateDrawer = () => {
+  drawerRecord.value = null
+  showJournalDrawer.value = true
+}
+
+const openEditDrawer = (rec) => {
+  drawerRecord.value = { ...rec }
+  showJournalDrawer.value = true
+}
+
+const handleJournalDataUpdated = () => {
+  refreshDataSilently()
+}
 
 // ETL 增强状态
 const etlProcessing = ref(false)
@@ -572,6 +612,7 @@ const handleETLEvent = (data) => {
       break
       
     case 'progress':
+      etlProcessing.value = true
       etlStats.value = {
         total: data.data.total,
         processed: data.data.processed,
@@ -727,6 +768,7 @@ const refreshDataSilently = async () => {
     const data = await window.electron.ipcRenderer.invoke('etl:get-enriched-data')
     if (data && !data.error) {
       allData.value = data
+      emit('data-updated', data)
     }
   } catch (error) {
     console.error('刷新数据失败:', error)
@@ -745,6 +787,8 @@ const setLoading = (val) => {
 defineExpose({
   setData,
   setLoading,
+  refreshData,
+  refreshDataSilently,
   allData
 })
 
@@ -794,13 +838,37 @@ onMounted(async () => {
     
     // 注册总结事件监听
     window.electron.ipcRenderer.on('summary:event', handleSummaryEvent)
+
+    // 注册主进程数据保存与变更通知
+    window.electron.ipcRenderer.on('journal:data-changed', handleJournalDataUpdated)
+
+    // 检查是否有正在运行中的 ETL 任务并恢复状态
+    try {
+      const progress = await window.electron.ipcRenderer.invoke('etl:get-progress')
+      if (progress && progress.processing) {
+        etlProcessing.value = true
+        etlStats.value = {
+          total: progress.total || 0,
+          processed: progress.processed || 0,
+          cached: progress.cached || 0,
+          failed: progress.failed || 0
+        }
+      }
+    } catch (err) {
+      console.warn('[DataBoardTab] Failed to check ETL progress on mount:', err)
+    }
   }
+
+  // 监听跨组件数据更新事件（如小鸡对话创建或保存新日记）
+  window.addEventListener('journal-data-updated', handleJournalDataUpdated)
 })
 
 onUnmounted(() => {
+  window.removeEventListener('journal-data-updated', handleJournalDataUpdated)
   if (window.electron && window.electron.ipcRenderer) {
     window.electron.ipcRenderer.removeAllListeners('etl:event')
     window.electron.ipcRenderer.removeAllListeners('summary:event')
+    window.electron.ipcRenderer.removeListener('journal:data-changed', handleJournalDataUpdated)
   }
 })
 </script>
@@ -817,6 +885,7 @@ onUnmounted(() => {
 /* 固定顶部 */
 .fixed-header {
   flex-shrink: 0;
+  max-height: 40vh;
   overflow-y: auto;
   border-bottom: 1px solid var(--n-border-color);
   background: var(--n-color);
@@ -824,7 +893,7 @@ onUnmounted(() => {
 }
 
 .controls {
-  padding: 16px;
+  padding: 8px 16px 4px 16px;
   margin-bottom: 0;
 }
 
@@ -851,7 +920,6 @@ onUnmounted(() => {
 .main-column {
   flex: 1;
   min-width: 0;
-  max-width: 70%;
   overflow-y: auto;
   overflow-x: hidden;
   min-height: 0;
@@ -869,7 +937,7 @@ onUnmounted(() => {
 
 /* 右侧边栏 - 灵感与时光 */
 .sidebar-column {
-  width: 30%;
+  width: 320px;
   min-width: 280px;
   max-width: 360px;
   flex-shrink: 0;
@@ -927,20 +995,45 @@ onUnmounted(() => {
   }
 }
 
-/* 响应式布局 */
+/* 响应式布局：中屏（900px ~ 1200px）依然保持双栏，适度紧凑 */
 @media (max-width: 1200px) {
   .dual-column-layout {
+    gap: 16px;
+  }
+  
+  .sidebar-column {
+    width: 280px;
+    min-width: 260px;
+  }
+}
+
+/* 响应式布局：窄屏（< 900px）转为纵向，正文主列表优先，父级允许整页垂直滚动，防止正文被挤压为 0 */
+@media (max-width: 900px) {
+  .content-wrapper {
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  
+  .dual-column-layout {
     flex-direction: column;
+    overflow: visible;
+    flex: none;
+    min-height: auto;
   }
   
   .main-column {
-    max-width: 100%;
+    flex: none;
+    width: 100%;
+    min-height: 380px;
+    overflow: visible;
   }
   
   .sidebar-column {
     width: 100%;
     max-width: 100%;
     height: auto;
+    flex: none;
+    overflow: visible;
   }
   
   .sidebar-sticky {
@@ -951,22 +1044,27 @@ onUnmounted(() => {
   
   .sidebar-sticky > * {
     flex: 1;
-    min-width: 280px;
+    min-width: 260px;
   }
 }
 
 @media (max-width: 768px) {
+  .controls {
+    padding: 10px 12px;
+  }
+
   .content-wrapper {
-    padding: 12px;
+    padding: 8px 12px;
   }
 
   .fixed-footer {
-    padding: 0px 12px;
+    padding: 4px 12px;
   }
 
   .pagination-container {
     flex-direction: column;
-    gap: 12px;
+    gap: 8px;
+    padding: 4px 0;
   }
 
   .sidebar-sticky {
@@ -976,5 +1074,62 @@ onUnmounted(() => {
   .sidebar-sticky > * {
     min-width: 100%;
   }
+}
+
+/* 小鸡日记专属空状态 */
+.xiaoji-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  text-align: center;
+  background: var(--color-card-bg, #ffffff);
+  border: 1px dashed var(--color-border, rgba(220, 226, 235, 0.8));
+  border-radius: 16px;
+  margin: 16px 0;
+}
+
+.empty-icon-box {
+  width: 72px;
+  height: 72px;
+  margin-bottom: 16px;
+}
+
+.empty-avatar-img {
+  width: 72px;
+  height: 72px;
+  border-radius: 20px;
+  box-shadow: 0 8px 20px rgba(245, 166, 35, 0.22);
+  object-fit: cover;
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.empty-avatar-img:hover {
+  transform: scale(1.08) rotate(4deg);
+}
+
+.empty-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--color-text, #1f2937);
+  margin: 0 0 6px 0;
+}
+
+.empty-desc {
+  font-size: 13px;
+  color: var(--color-text-secondary, #6b7280);
+  margin: 0 0 20px 0;
+  max-width: 380px;
+  line-height: 1.5;
+}
+
+.empty-action-btn {
+  background: linear-gradient(135deg, #f5a623 0%, #f78c1e 100%) !important;
+  border: none !important;
+  color: #fff !important;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(245, 166, 35, 0.35);
+  padding: 0 22px;
 }
 </style>

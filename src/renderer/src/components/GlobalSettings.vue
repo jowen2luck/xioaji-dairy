@@ -51,14 +51,40 @@
             <n-form-item label="启用的工具">
               <n-checkbox-group v-model:value="assistantConfig.enabledTools">
                 <n-space>
-                  <n-checkbox value="search_records">语义搜索</n-checkbox>
-                  <n-checkbox value="query_records">精确查询</n-checkbox>
+                  <n-checkbox value="create_record">新建日记</n-checkbox>
+                  <n-checkbox value="search_records">综合检索 (语义+关键词+重排)</n-checkbox>
+                  <n-checkbox value="query_records">条件筛选 (时间/项目/标签)</n-checkbox>
                   <n-checkbox value="sql_analysis">统计分析</n-checkbox>
                   <n-checkbox value="calendar_resolver">日历解析</n-checkbox>
                   <n-checkbox value="metadata_explorer">元数据探索</n-checkbox>
                   <n-checkbox value="insight_analyst">深度洞察</n-checkbox>
                 </n-space>
               </n-checkbox-group>
+            </n-form-item>
+          </n-form>
+        </n-tab-pane>
+
+        <!-- 长期记忆 -->
+        <n-tab-pane name="memory" tab="长期记忆">
+          <n-form label-placement="top" label-width="auto">
+            <n-alert type="info" :show-icon="false" style="margin-bottom: 16px;">
+              智能体常驻画像与长期记忆 (Virtual RAM)。小鸡在日常对话与记录中发现的重要事实、习惯与长期偏好，会自动更新此处；你也可以在此直接编辑与维护。
+            </n-alert>
+            <n-form-item label="用户画像与偏好 (User Persona)">
+              <n-input
+                v-model:value="coreMemoryData.user"
+                type="textarea"
+                :autosize="{ minRows: 6, maxRows: 12 }"
+                placeholder="例如：称呼、职业、作息规律、关注的重点项目、偏好的记录风格等..."
+              />
+            </n-form-item>
+            <n-form-item label="助手人设与准则 (Agent Persona)">
+              <n-input
+                v-model:value="coreMemoryData.agent"
+                type="textarea"
+                :autosize="{ minRows: 5, maxRows: 10 }"
+                placeholder="记录小助手的核心角色定位、回答风格与交互原则..."
+              />
             </n-form-item>
           </n-form>
         </n-tab-pane>
@@ -153,9 +179,68 @@ const assistantConfig = ref({
 // 图表配置
 const chartsConfig = ref(loadChartsConfig())
 
-// 加载时刷新配置
-onMounted(() => {
+// 长期记忆 (Core Memory) 状态
+const coreMemoryData = ref({
+  user: '',
+  agent: ''
+})
+
+const loadCoreMemory = async () => {
+  try {
+    if (window.assistant?.coreMemory?.get) {
+      const mem = await window.assistant.coreMemory.get()
+      coreMemoryData.value = {
+        user: mem?.user || '',
+        agent: mem?.agent || ''
+      }
+    }
+  } catch (err) {
+    console.warn('[GlobalSettings] Failed to load core memory:', err)
+  }
+}
+
+// 刷新配置
+const refreshConfig = () => {
+  const freshConfig = loadConfig()
+  assistantConfig.value = {
+    selectedBaseURL: freshConfig.selectedBaseURL,
+    selectedModel: freshConfig.selectedModel,
+    etlBaseURL: freshConfig.etl.baseURL,
+    etlModel: freshConfig.etl.model,
+    systemPrompt: freshConfig.prompts.chatSystem,
+    temperature: freshConfig.temperature,
+    top_p: freshConfig.top_p,
+    enabledTools: [...freshConfig.enabledTools]
+  }
   chartsConfig.value = loadChartsConfig()
+  loadCoreMemory()
+}
+
+// 加载及抽屉打开时刷新配置
+onMounted(() => {
+  refreshConfig()
+})
+
+watch(() => props.visible, (val) => {
+  if (val) {
+    refreshConfig()
+  }
+})
+
+watch(() => assistantConfig.value.selectedBaseURL, (newUrl) => {
+  const urls = DEFAULT_CONFIG.baseURLs || []
+  const entry = urls.find(e => e.url === newUrl)
+  if (entry?.models?.length && !entry.models.includes(assistantConfig.value.selectedModel)) {
+    assistantConfig.value.selectedModel = entry.models[0]
+  }
+})
+
+watch(() => assistantConfig.value.etlBaseURL, (newUrl) => {
+  const urls = DEFAULT_CONFIG.baseURLs || []
+  const entry = urls.find(e => e.url === newUrl)
+  if (entry?.models?.length && !entry.models.includes(assistantConfig.value.etlModel)) {
+    assistantConfig.value.etlModel = entry.models[0]
+  }
 })
 
 // Base URL 选项
@@ -172,7 +257,7 @@ const currentModels = computed(() => {
   const urls = DEFAULT_CONFIG.baseURLs || []
   const selectedEntry = urls.find(entry => entry.url === assistantConfig.value.selectedBaseURL)
   return (selectedEntry?.models || []).map(model => ({
-    label: model,
+    label: model === 'bailian-auto' ? '百炼模型聚合 (bailian-auto)' : model,
     value: model
   }))
 })
@@ -182,13 +267,23 @@ const currentEtlModels = computed(() => {
   const urls = DEFAULT_CONFIG.baseURLs || []
   const selectedEntry = urls.find(entry => entry.url === assistantConfig.value.etlBaseURL)
   return (selectedEntry?.models || []).map(model => ({
-    label: model,
+    label: model === 'bailian-auto' ? '百炼模型聚合 (bailian-auto)' : model,
     value: model
   }))
 })
 
 // 保存设置
-const saveSettings = () => {
+const saveSettings = async () => {
+  // 保存长期记忆
+  if (window.assistant?.coreMemory?.update) {
+    try {
+      await window.assistant.coreMemory.update('user', coreMemoryData.value.user)
+      await window.assistant.coreMemory.update('agent', coreMemoryData.value.agent)
+    } catch (memErr) {
+      console.error('[GlobalSettings] Failed to save core memory:', memErr)
+    }
+  }
+
   // 保存智能体配置
   const partialConfig = {
     selectedBaseURL: assistantConfig.value.selectedBaseURL,
@@ -228,7 +323,7 @@ const saveSettings = () => {
 }
 
 // 恢复默认
-const resetToDefault = () => {
+const resetToDefault = async () => {
   if (confirm('确定要恢复所有设置到默认值吗？')) {
     assistantConfig.value = {
       selectedBaseURL: DEFAULT_CONFIG.selectedBaseURL,
@@ -242,6 +337,7 @@ const resetToDefault = () => {
     }
     // 重新加载默认图表配置
     chartsConfig.value = getDefaultChartsConfig()
+    await loadCoreMemory()
   }
 }
 </script>

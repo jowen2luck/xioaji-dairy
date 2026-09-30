@@ -1,8 +1,21 @@
 <template>
   <div class="react-panel">
     <div class="panel-header">
-      <n-text strong>思维记录</n-text>
-      <n-badge v-if="steps.length > 0" :value="steps.length" type="info" />
+      <div class="panel-header-left">
+        <n-icon size="15" color="var(--accent-gold)"><SparklesIcon /></n-icon>
+        <span class="panel-header-title">思维链</span>
+        <span v-if="steps.length > 0" class="step-count-badge">{{ steps.length }}</span>
+      </div>
+      <div class="panel-header-actions">
+        <n-tooltip trigger="hover" placement="left">
+          <template #trigger>
+            <n-button quaternary circle size="tiny" class="close-btn" @click="$emit('close')">
+              <template #icon><n-icon size="13"><CloseIcon /></n-icon></template>
+            </n-button>
+          </template>
+          收起面板
+        </n-tooltip>
+      </div>
     </div>
     
     <!-- 空状态 -->
@@ -24,6 +37,7 @@
     </div>
     
     <!-- ReAct 步骤手风琴布局 -->
+    <!-- ReAct 步骤手风琴布局（极简扁平流式） -->
     <div v-else class="steps-container">
       <n-collapse 
         v-model:expanded-names="expandedNamesArray" 
@@ -36,285 +50,126 @@
           :name="idx"
           :class="['step-item', `step-${step.action || step.type}`]"
         >
-          <!-- 手风琴标题（包含标签、标题、时间） -->
+          <!-- 极简手风琴标题（轻量微标 + 简明动作 + 弱化时间） -->
           <template #header>
             <div class="step-header">
-              <n-tag :type="getTagType(step)" size="small" round class="step-tag">
-                {{ getStepLabel(step) }}
-              </n-tag>
-              <span class="step-title">{{ getStepTitle(step) }}</span>
+              <span class="step-indicator" :class="`indicator-${step.action || step.type}`">
+                <n-icon size="13" v-if="step.action === 'tool_calls' || step.type === 'tool_calls'"><ToolIcon /></n-icon>
+                <n-icon size="13" v-else-if="step.action === 'final_answer'"><CheckIcon /></n-icon>
+                <n-icon size="13" v-else-if="step.type === 'user_query'"><UserIcon /></n-icon>
+                <n-icon size="13" v-else><SparklesIcon /></n-icon>
+              </span>
+              <span class="step-type-badge">{{ getStepLabel(step) }}</span>
+              <span class="step-title" :title="getStepTitle(step)">{{ getStepTitle(step) }}</span>
               <span class="step-time">{{ formatTime(step.timestamp || step.time) }}</span>
             </div>
           </template>
           
-          <!-- 步骤内容 -->
+          <!-- 步骤内容：扁平流式排版，去除多层嵌套框 -->
           <div class="step-content">
-            <!-- 深度思考内容（新增） -->
-            <div v-if="step.reasoning_content" class="deep-thinking-section">
-              <div class="section-label">
-                <n-icon size="14"><ThinkIcon /></n-icon>
-                <span>深度思考</span>
+            <!-- 深度思考内容 (CoT) - 优雅引文线 -->
+            <div v-if="step.reasoning_content" class="flow-reasoning deep">
+              <div class="reasoning-meta">
+                <n-icon size="12"><ThinkIcon /></n-icon>
+                <span>深度思考推理</span>
               </div>
-              <div class="thinking-text">{{ step.reasoning_content }}</div>
+              <div class="flow-text">{{ step.reasoning_content }}</div>
             </div>
             
-            <!-- 思考内容 -->
-            <div v-if="step.reasoning" class="reasoning-section">
-              <div class="section-label">
-                <n-icon size="14"><ThinkIcon /></n-icon>
-                <span>思考过程</span>
-              </div>
-              <div class="reasoning-text">{{ step.reasoning }}</div>
+            <!-- 思考过程（无显式 CoT 时的轻量思考） -->
+            <div 
+              v-else-if="step.reasoning && !isPlaceholderReasoning(step.reasoning)" 
+              class="flow-reasoning"
+            >
+              <div class="flow-text">{{ step.reasoning }}</div>
             </div>
             
-            <!-- 用户问题（第一步） -->
-            <div v-if="step.type === 'user_query'" class="query-section">
-              <div class="section-label">
-                <n-icon size="14"><UserIcon /></n-icon>
-                <span>用户问题</span>
-              </div>
-              <div class="query-text">{{ step.query }}</div>
+            <!-- 用户问题（极简预览） -->
+            <div v-if="step.type === 'user_query'" class="flow-query">
+              <div class="query-bubble">{{ step.query }}</div>
             </div>
             
-            <!-- 工具调用信息 -->
-            <div v-if="step.tools && step.tools.length > 0" class="tools-section">
-              <div class="section-label">
-                <n-icon size="14"><ToolIcon /></n-icon>
-                <span>工具调用</span>
-              </div>
-              <div v-for="(tool, ti) in step.tools" :key="ti" class="tool-item">
-                <div class="tool-name">
-                  <n-tag type="warning" size="small">{{ getToolLabel(tool.name || tool) }}</n-tag>
+            <!-- 工具调用（单行紧凑胶囊） -->
+            <div v-if="step.tools && step.tools.length > 0" class="flow-tools">
+              <div v-for="(tool, ti) in step.tools" :key="ti" class="tool-chip">
+                <div class="tool-chip-bar">
+                  <span class="chip-icon">⚡</span>
+                  <span class="chip-name">{{ getToolLabel(tool.name || tool) }}</span>
+                  <span v-if="getToolBriefArg(tool.args)" class="chip-arg-preview" :title="getToolBriefArg(tool.args)">
+                    {{ getToolBriefArg(tool.args) }}
+                  </span>
+                  <button 
+                    v-if="tool.args && Object.keys(tool.args).length > 0" 
+                    type="button"
+                    class="chip-toggle-btn"
+                    @click.stop="toggleToolArgs(idx, ti)"
+                  >
+                    {{ isToolArgsOpen(idx, ti) ? '收起' : '参数' }}
+                  </button>
                 </div>
-                <div v-if="tool.args" class="tool-args">
+                <div v-if="isToolArgsOpen(idx, ti)" class="tool-chip-details">
                   <n-code :code="formatJSON(tool.args)" language="json" :word-wrap="true" />
                 </div>
               </div>
             </div>
             
-            <!-- 工具结果（检索结果用卡片布局） -->
-            <div v-if="step.results && step.results.length > 0" class="results-section">
-              <div class="section-label">
-                <n-icon size="14"><ResultIcon /></n-icon>
-                <span>执行结果</span>
-              </div>
-              
-              <div v-for="(result, ri) in step.results" :key="ri" class="result-item">
-                <div class="result-header">
-                  <n-tag :type="result.success ? 'success' : 'error'" size="small">
-                    {{ result.success ? '✓' : '✗' }} {{ getToolLabel(result.name) }}
-                  </n-tag>
-                  <span class="result-count" v-if="getRecordCount(result.result) > 0">
-                    {{ getRecordCount(result.result) }} 条记录
+            <!-- 工具结果（轻量状态与摘要） -->
+            <div v-if="step.results && step.results.length > 0" class="flow-results">
+              <div v-for="(result, ri) in step.results" :key="ri" class="result-row">
+                <div class="result-status-bar">
+                  <span class="status-icon" :class="{ ok: result.success, err: !result.success }">
+                    {{ result.success ? '✓' : '✗' }}
                   </span>
+                  <span class="result-tool-name">{{ getToolLabel(result.name) }}</span>
+                  <span class="result-brief" v-if="getRecordCount(result.result) > 0">
+                    返回 {{ getRecordCount(result.result) }} 条记录
+                  </span>
+                  <button 
+                    v-if="result.result && !hasRecords(result.result)" 
+                    type="button"
+                    class="result-detail-btn"
+                    @click.stop="toggleRawResult(idx, ri)"
+                  >
+                    {{ isRawResultOpen(idx, ri) ? '收起' : '详情' }}
+                  </button>
                 </div>
                 
-                <!-- 检索记录结果用卡片横滑 -->
-                <div v-if="hasRecords(result.result)" class="records-carousel">
-                  <div class="records-track">
+                <!-- 检索记录横滑展示（卡片微型化、扁平化） -->
+                <div v-if="hasRecords(result.result)" class="records-compact-container">
+                  <div class="records-compact-track">
                     <div 
-                      v-for="(record, rci) in getRecords(result.result).slice(0, 10)" 
+                      v-for="(record, rci) in getRecords(result.result).slice(0, 8)" 
                       :key="rci" 
-                      class="record-card"
+                      class="mini-record-card"
                     >
-                      <!-- 卡片头部：类型 + 时间 -->
-                      <div class="record-card-header">
-                        <div class="header-left">
-                          <n-tag size="tiny" type="info" round :bordered="false">{{ record.shanggexiangmu || '未分类' }}</n-tag>
-                          <span class="separator">|</span>
-                          <span class="record-time">{{ formatRecordTime(record.time) }}</span>
-                        </div>
+                      <div class="mini-card-header">
+                        <span class="record-type-badge">{{ record.shanggexiangmu || '日记' }}</span>
+                        <span class="record-date">{{ formatRecordTime(record.time) }}</span>
                       </div>
-                      <!-- 卡片内容：可滚动 -->
-                      <div class="record-card-body">
-                        <div class="record-content" v-html="formatGanshou(record.ganshou || record.content)"></div>
-                      </div>
-                      <!-- 卡片底部：时长 -->
-                      <div class="record-card-footer">
-                        <n-icon size="12"><TimeIcon /></n-icon>
-                        <span>{{ record.chixushijian || '未知时长' }}</span>
-                      </div>
+                      <div class="mini-card-body" v-html="formatGanshou(record.ganshou || record.content)"></div>
                     </div>
                   </div>
-                  <div v-if="getRecordCount(result.result) > 10" class="more-hint">
-                    <n-text depth="3">还有 {{ getRecordCount(result.result) - 10 }} 条更多结果...</n-text>
+                  <div v-if="getRecordCount(result.result) > 8" class="more-hint-clean">
+                    共 {{ getRecordCount(result.result) }} 条记录
                   </div>
                 </div>
-                
-                <!-- metadata_explorer 结果（表格展示） -->
-                <div v-else-if="isMetadataExplorer(result.result)" class="metadata-result">
-                  <div v-if="hasMetadataData(result.result)" class="metadata-table">
-                    <div class="metadata-header">
-                      <n-text depth="3" style="font-size: 12px;">
-                        字段: {{ getMetadataField(result.result) }} | 总计: {{ getMetadataTotal(result.result) }} 条
-                        <span v-if="getMetadataHasMore(result.result)">（仅显示前 {{ getMetadataReturned(result.result) }} 条）</span>
-                      </n-text>
-                    </div>
-                    <div class="metadata-items">
-                      <div 
-                        v-for="(item, idx) in getMetadataItems(result.result)" 
-                        :key="idx" 
-                        class="metadata-item"
-                      >
-                        <span class="metadata-value">{{ item.value }}</span>
-                        <n-tag size="tiny" type="info" round>{{ item.count }}</n-tag>
-                      </div>
-                    </div>
-                  </div>
-                  <n-empty v-else description="未找到相关元数据" size="small" />
-                </div>
-                
-                <!-- insight_analyst 结果（展示洞察和统计） -->
-                <div v-else-if="isInsightAnalyst(result.result)" class="insight-result">
-                  <div v-if="hasInsightData(result.result)" class="insight-content">
-                    <!-- 情绪-能量关联分析：增强展示 -->
-                    <div v-if="isEmotionEnergyAnalysis(result.result)" class="emotion-energy-analysis">
-                      <!-- 洞察摘要 -->
-                      <div v-if="getInsightSummary(result.result)" class="insight-summary-card">
-                        <n-alert type="info" :bordered="false">
-                          <template #icon>
-                            <n-icon><ThinkIcon /></n-icon>
-                          </template>
-                          {{ getInsightSummary(result.result) }}
-                        </n-alert>
-                      </div>
-                      
-                      <!-- 三态能量对比 -->
-                      <div class="emotion-stats-grid">
-                        <div class="emotion-stat-card positive">
-                          <div class="stat-label">
-                            <span class="label-dot"></span>
-                            <span>正面情绪</span>
-                          </div>
-                          <div class="stat-value">{{ getEmotionEnergy(result.result, 'positive') }}</div>
-                          <div class="stat-extra">
-                            <span class="sample-count">{{ getEmotionCount(result.result, 'positive') }} 样本</span>
-                            <span v-if="getEmotionStdDev(result.result, 'positive') !== null" class="std-dev">
-                              ±{{ getEmotionStdDev(result.result, 'positive') }}
-                            </span>
-                          </div>
-                          <!-- 实心进度条 -->
-                          <div class="energy-bar">
-                            <div class="energy-fill" :style="{ width: getEnergyBarWidth(result.result, 'positive') }"></div>
-                          </div>
-                        </div>
-                        
-                        <div class="emotion-stat-card neutral">
-                          <div class="stat-label">
-                            <span class="label-dot"></span>
-                            <span>中性情绪</span>
-                          </div>
-                          <div class="stat-value">{{ getEmotionEnergy(result.result, 'neutral') }}</div>
-                          <div class="stat-extra">
-                            <span class="sample-count">{{ getEmotionCount(result.result, 'neutral') }} 样本</span>
-                            <span v-if="getEmotionStdDev(result.result, 'neutral') !== null" class="std-dev">
-                              ±{{ getEmotionStdDev(result.result, 'neutral') }}
-                            </span>
-                          </div>
-                          <div class="energy-bar">
-                            <div class="energy-fill" :style="{ width: getEnergyBarWidth(result.result, 'neutral') }"></div>
-                          </div>
-                        </div>
-                        
-                        <div class="emotion-stat-card negative">
-                          <div class="stat-label">
-                            <span class="label-dot"></span>
-                            <span>负面情绪</span>
-                          </div>
-                          <div class="stat-value">{{ getEmotionEnergy(result.result, 'negative') }}</div>
-                          <div class="stat-extra">
-                            <span class="sample-count">{{ getEmotionCount(result.result, 'negative') }} 样本</span>
-                            <span v-if="getEmotionStdDev(result.result, 'negative') !== null" class="std-dev">
-                              ±{{ getEmotionStdDev(result.result, 'negative') }}
-                            </span>
-                          </div>
-                          <div class="energy-bar">
-                            <div class="energy-fill" :style="{ width: getEnergyBarWidth(result.result, 'negative') }"></div>
-                          </div>
-                        </div>
-                      </div>
-                      
-                      <!-- 分析质量指标 -->
-                      <div class="quality-indicators">
-                        <div class="quality-item">
-                          <span class="quality-label">总样本数</span>
-                          <span class="quality-value">{{ getQualityMetric(result.result, 'totalSamples') }}</span>
-                        </div>
-                        <div class="quality-item">
-                          <span class="quality-label">数据覆盖率</span>
-                          <span class="quality-value">{{ getQualityMetric(result.result, 'coverage') }}%</span>
-                        </div>
-                        <div v-if="getComparisonSignificance(result.result)" class="quality-item">
-                          <span class="quality-label">显著性</span>
-                          <n-tag :type="getSignificanceTagType(result.result)" size="tiny" round>
-                            {{ getSignificanceLabel(result.result) }}
-                          </n-tag>
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <!-- 其他类型分析：使用通用展示 -->
-                    <div v-else class="generic-insight">
-                      <!-- 洞察摘要 -->
-                      <div v-if="getInsightSummary(result.result)" class="insight-summary">
-                        <n-alert type="info" :bordered="false">
-                          <template #icon>
-                            <n-icon><ThinkIcon /></n-icon>
-                          </template>
-                          {{ getInsightSummary(result.result) }}
-                        </n-alert>
-                      </div>
-                      
-                      <!-- 统计信息 -->
-                      <div class="insight-stats">
-                        <n-statistic label="分析记录数" :value="getInsightRecordCount(result.result)" />
-                        <n-statistic label="AI增强覆盖" :value="getInsightAiCoverage(result.result) + '%'" />
-                      </div>
-                    </div>
-                    
-                    <!-- 详细数据（折叠展示） -->
-                    <n-collapse :default-expanded-names="[]" class="insight-data-collapse">
-                      <n-collapse-item title="查看详细数据" name="detail">
-                        <n-code :code="formatJSON(getInsightData(result.result))" language="json" :word-wrap="true" />
-                      </n-collapse-item>
-                    </n-collapse>
-                  </div>
-                  <n-empty v-else description="分析结果为空" size="small">
-                    <template #extra>
-                      <n-text depth="3" style="font-size: 12px;">可能没有匹配的数据，请尝试调整查询条件</n-text>
-                    </template>
-                  </n-empty>
-                </div>
-                
-                <!-- SQL分析结果（含空状态） -->
-                <div v-else-if="isSqlAnalysis(result.result)" class="sql-analysis-result">
-                  <div v-if="hasSqlData(result.result)" class="sql-data-summary">
-                    <n-statistic label="记录数" :value="getSqlRecordCount(result.result)" />
-                    <n-statistic label="AI增强数" :value="getSqlAiCount(result.result)" />
-                  </div>
-                  <n-empty v-else description="分析结果为空" size="small">
-                    <template #extra>
-                      <n-text depth="3" style="font-size: 12px;">可能没有匹配的数据，请尝试调整查询条件</n-text>
-                    </template>
-                  </n-empty>
-                </div>
-                
-                <!-- 其他结果用代码块展示 -->
-                <div v-else-if="result.result" class="result-json">
+
+                <!-- 原始结果展开 -->
+                <div v-if="isRawResultOpen(idx, ri)" class="raw-data-box">
                   <n-code :code="formatJSON(result.result)" language="json" :word-wrap="true" />
                 </div>
               </div>
             </div>
             
             <!-- 最终答案标识 -->
-            <div v-if="step.action === 'final_answer'" class="final-badge">
-              <n-icon size="16" color="#52c41a"><CheckIcon /></n-icon>
-              <span>已生成最终答案</span>
+            <div v-if="step.action === 'final_answer' && !step.reasoning_content" class="final-badge-clean">
+              <n-icon size="13" color="#18a058"><CheckIcon /></n-icon>
+              <span>推理结束，已生成最终回答</span>
             </div>
             
-            <!-- 加载中状态(省略号动画) -->
-            <div v-if="step.type === 'loading'" class="loading-state">
-              <span class="thinking-text">{{ step.detail || '正在思考' }}</span>
+            <!-- 加载中动画 -->
+            <div v-if="step.type === 'loading'" class="loading-state-clean">
+              <span class="loading-label">{{ step.detail || '正在思考' }}</span>
               <span class="loading-dots">
                 <span class="dot"></span>
                 <span class="dot"></span>
@@ -337,6 +192,8 @@ const props = defineProps({
     default: () => []
   }
 })
+
+const emit = defineEmits(['close'])
 
 // 当前展开的步骤索引
 const activeStep = ref(null)
@@ -380,17 +237,24 @@ onUnmounted(() => {
 
 // 工具名称映射
 const TOOL_LABELS = {
-  search_records: '检索记录',
-  query_records: '查询记录',
-  sql_analysis: 'SQL 分析',
+  create_record: '新建日记',
+  update_record: '更新日记',
+  delete_record: '删除日记',
+  search_records: '综合检索 (双路+重排)',
+  query_records: '条件筛选 (属性过滤)',
+  sql_analysis: '统计分析',
+  calendar_resolver: '日期推算',
   metadata_explorer: '元数据探索',
-  insight_analyst: '洞察分析'
+  insight_analyst: '洞察分析',
+  get_record_detail: '查看详情'
 }
 
 const getToolLabel = (name) => TOOL_LABELS[name] || name
 
 // 图标组件
-const ThinkIcon = { render: () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', innerHTML: '<path fill="currentColor" d="M12 2a9 9 0 0 0-9 9c0 4.17 2.84 7.67 6.69 8.69L12 22l2.31-2.31C18.16 18.67 21 15.17 21 11a9 9 0 0 0-9-9m0 2c1.66 0 3 1.34 3 3s-1.34 3-3 3s-3-1.34-3-3s1.34-3 3-3"/>' }) }
+const ThinkIcon = { render: () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', innerHTML: '<path fill="currentColor" d="M12 2L9.5 8.5L3 11l6.5 2.5L12 20l2.5-6.5L21 11l-6.5-2.5zm6.5 14.5l-1.5 3.5l-3.5 1.5l3.5 1.5l1.5 3.5l1.5-3.5l3.5-1.5l-3.5-1.5z"/>' }) }
+const SparklesIcon = { render: () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', innerHTML: '<path fill="currentColor" d="M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4L6.5 9.5L1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z"/>' }) }
+const CloseIcon = { render: () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', innerHTML: '<path fill="currentColor" d="M19 6.41L17.59 5L12 10.59L6.41 5L5 6.41L10.59 12L5 17.59L6.41 19L12 13.41L17.59 19L19 17.59L13.41 12z"/>' }) }
 const UserIcon = { render: () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', innerHTML: '<path fill="currentColor" d="M12 4a4 4 0 0 1 4 4a4 4 0 0 1-4 4a4 4 0 0 1-4-4a4 4 0 0 1 4-4m0 10c4.42 0 8 1.79 8 4v2H4v-2c0-2.21 3.58-4 8-4"/>' }) }
 const ToolIcon = { render: () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', innerHTML: '<path fill="currentColor" d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9c-2-2-5-2.4-7.4-1.3L9 6L6 9L1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4"/>' }) }
 const ResultIcon = { render: () => h('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', innerHTML: '<path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2m0 16H5V5h14zm-7-2h2v-4h4v-2h-4V7h-2v4H8v2h4z"/>' }) }
@@ -417,18 +281,53 @@ const getTagType = (step) => {
   return types[action] || 'default'
 }
 
-// 获取步骤标签
+// 控制工具参数展开状态
+const openToolArgs = ref({})
+const toggleToolArgs = (stepIdx, toolIdx) => {
+  const key = `${stepIdx}_${toolIdx}`
+  openToolArgs.value[key] = !openToolArgs.value[key]
+}
+const isToolArgsOpen = (stepIdx, toolIdx) => {
+  return !!openToolArgs.value[`${stepIdx}_${toolIdx}`]
+}
+
+// 控制原始结果展开状态
+const openRawResults = ref({})
+const toggleRawResult = (stepIdx, resIdx) => {
+  const key = `${stepIdx}_${resIdx}`
+  openRawResults.value[key] = !openRawResults.value[key]
+}
+const isRawResultOpen = (stepIdx, resIdx) => {
+  return !!openRawResults.value[`${stepIdx}_${resIdx}`]
+}
+
+// 提取工具核心入参简短预览
+const getToolBriefArg = (args) => {
+  if (!args || typeof args !== 'object') return ''
+  if (args.query) return `"${truncate(args.query, 16)}"`
+  if (args.date) return `日期: ${args.date}`
+  if (args.sql) return `SQL: "${truncate(args.sql, 16)}"`
+  if (args.field) return `字段: ${args.field}`
+  const keys = Object.keys(args)
+  if (keys.length > 0) {
+    const firstKey = keys[0]
+    return `${firstKey}: ${truncate(String(args[firstKey]), 14)}`
+  }
+  return ''
+}
+
+// 获取步骤轻量微标标签
 const getStepLabel = (step) => {
   const action = step.action || step.type
   const labels = {
-    user_query: '用户输入',
-    thinking: `推理 ${step.iteration || ''}`,
-    tool_calls: `迭代 ${step.iteration || ''}`,
-    final_answer: '最终答案',
-    loading: '处理中',
+    user_query: '提问',
+    thinking: '思考',
+    tool_calls: '工具',
+    final_answer: '完成',
+    loading: '进行中',
     error: '错误'
   }
-  return labels[action] || `步骤 ${step.iteration || ''}`
+  return labels[action] || '步骤'
 }
 
 // 获取步骤标题
@@ -498,6 +397,19 @@ const truncate = (text, len) => {
   if (!text) return ''
   const str = String(text)
   return str.length > len ? str.slice(0, len) + '...' : str
+}
+
+// 判定是否为占位思考文本（避免在面板中展示冗余无意义文字）
+const isPlaceholderReasoning = (text) => {
+  if (!text) return true
+  const trimmed = String(text).trim()
+  return (
+    trimmed === '已生成最终回复' ||
+    trimmed === '已生成最终答案' ||
+    trimmed === '思考中...' ||
+    trimmed === '已完成' ||
+    trimmed === '(无显式推理)'
+  )
 }
 
 // 检查是否有记录（支持多层嵌套格式）
@@ -692,25 +604,55 @@ const getSignificanceTagType = (result) => {
 <style scoped>
 .react-panel {
   height: 100%;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--color-card-bg);
+  background: var(--bg-parchment, #1b1b1f);
   border-radius: 8px;
   overflow: hidden;
+  border: 1px solid var(--border-light, rgba(255, 255, 255, 0.08));
 }
 
 .panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-background-soft);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-light, rgba(255, 255, 255, 0.08));
+  background: var(--bg-parchment-soft, #222226);
   flex-shrink: 0;
+}
+
+.panel-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.panel-header-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-charcoal, var(--color-text));
+}
+
+.step-count-badge {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: var(--bg-parchment-mute, rgba(255, 255, 255, 0.08));
+  color: var(--text-muted, rgba(200, 190, 170, 0.6));
+  font-weight: 600;
+}
+
+.panel-header-actions {
+  display: flex;
+  align-items: center;
 }
 
 .empty-state {
   flex: 1;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -719,6 +661,7 @@ const getSignificanceTagType = (result) => {
 
 .steps-container {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 8px;
 }
@@ -729,23 +672,28 @@ const getSignificanceTagType = (result) => {
 }
 
 .react-collapse :deep(.n-collapse-item) {
-  background: var(--color-background);
+  background: var(--bg-parchment-soft, #222226);
   border-radius: 8px;
   margin-bottom: 8px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--border-light, rgba(255, 255, 255, 0.08));
   overflow: hidden;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.react-collapse :deep(.n-collapse-item--active) {
+  border-color: var(--border-subtle, rgba(200, 174, 125, 0.35));
 }
 
 .react-collapse :deep(.n-collapse-item__header) {
-  padding: 10px 12px;
-  background: var(--color-background-soft);
+  padding: 8px 12px;
+  background: transparent;
 }
 
 .react-collapse :deep(.n-collapse-item__content-inner) {
   padding: 0;
 }
 
-/* 步骤头部 */
+/* 步骤头部：极简微标 + 动作意图 + 时间 */
 .step-header {
   display: flex;
   align-items: center;
@@ -754,15 +702,33 @@ const getSignificanceTagType = (result) => {
   min-width: 0;
 }
 
-.step-tag {
+.step-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--bg-parchment-mute, rgba(200, 174, 125, 0.12));
+  color: var(--accent-gold, #C8AE7D);
+  flex-shrink: 0;
+}
+
+.step-type-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-gold, #C8AE7D);
+  background: var(--bg-parchment-mute, rgba(200, 174, 125, 0.1));
+  padding: 1px 6px;
+  border-radius: 4px;
   flex-shrink: 0;
 }
 
 .step-title {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
-  color: var(--color-text);
+  font-size: 12.5px;
+  color: var(--text-charcoal, var(--color-text));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -771,230 +737,308 @@ const getSignificanceTagType = (result) => {
 .step-time {
   flex-shrink: 0;
   font-size: 11px;
-  color: var(--color-text-secondary);
+  color: var(--text-muted, var(--color-text-secondary));
+  opacity: 0.7;
   margin-left: auto;
-  padding-left: 8px;
+  padding-left: 6px;
 }
 
-/* 步骤内容 */
+/* 步骤内容：扁平流式排版 */
 .step-content {
-  padding: 12px;
+  padding: 8px 12px 12px 12px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
-/* 各内容区块 */
-.section-label {
+/* 深度思考/思考过程：优雅引文样式 (Quote Style) */
+.flow-reasoning {
+  border-left: 2px solid var(--border-subtle, rgba(200, 174, 125, 0.4));
+  padding: 4px 0 4px 10px;
+  margin: 2px 0;
+}
+
+.flow-reasoning.deep {
+  border-left-color: var(--accent-gold, #C8AE7D);
+  background: rgba(200, 174, 125, 0.04);
+  border-radius: 0 6px 6px 0;
+  padding: 6px 8px 6px 10px;
+}
+
+.reasoning-meta {
   display: flex;
   align-items: center;
   gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-gold, #C8AE7D);
+  margin-bottom: 4px;
+}
+
+.flow-text {
   font-size: 12px;
-  color: var(--color-text-secondary);
-  margin-bottom: 6px;
-  font-weight: 500;
-}
-
-.reasoning-section,
-.query-section,
-.tools-section,
-.results-section,
-.deep-thinking-section {
-  background: var(--color-background-soft);
-  border-radius: 6px;
-  padding: 10px;
-}
-
-.reasoning-text,
-.query-text {
-  font-size: 13px;
   line-height: 1.6;
-  color: var(--color-text);
+  color: var(--text-charcoal, var(--color-text));
   word-break: break-word;
   white-space: pre-wrap;
 }
 
-/* 深度思考根据样式（新增） */
-.deep-thinking-section {
-  background: linear-gradient(135deg, rgba(102, 51, 153, 0.05) 0%, var(--color-background-soft) 100%);
-  border: 1px solid rgba(102, 51, 153, 0.2);
-  margin-bottom: 12px;
+/* 用户问题极简气泡 */
+.flow-query {
+  margin: 2px 0;
 }
 
-.deep-thinking-section .section-label {
-  color: #663399;
-  font-weight: 700;
-}
-
-.thinking-text {
+.query-bubble {
+  display: inline-block;
   font-size: 12px;
-  line-height: 1.7;
-  color: var(--color-text);
-  word-break: break-word;
-  white-space: pre-wrap;
-  max-height: 300px;
-  overflow-y: auto;
-  padding: 8px;
-  background: rgba(255, 255, 255, 0.6);
-  border-radius: 4px;
-  border-left: 3px solid #663399;
-  font-style: italic;
-  margin-top: 6px;
-}
-
-/* 工具调用卡片 */
-.tool-item {
-  background: var(--color-background);
+  line-height: 1.5;
+  padding: 4px 8px;
   border-radius: 6px;
-  padding: 8px;
+  background: var(--bg-parchment-mute, rgba(0, 0, 0, 0.05));
+  color: var(--text-charcoal, var(--color-text));
+}
+
+/* 工具调用（单行紧凑胶囊，去除巨大多层背景） */
+.flow-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tool-chip {
+  background: var(--bg-parchment-mute, rgba(0, 0, 0, 0.04));
+  border: 1px solid var(--border-light, rgba(200, 174, 125, 0.2));
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+
+.tool-chip-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.chip-icon {
+  font-size: 12px;
+  color: var(--accent-gold, #e6a23c);
+}
+
+.chip-name {
+  font-weight: 600;
+  color: var(--text-sepia, #5A4A3C);
+}
+
+.chip-arg-preview {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-muted, #8A7A6A);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, monospace;
+}
+
+.chip-toggle-btn,
+.result-detail-btn {
+  background: none;
+  border: none;
+  font-size: 10px;
+  color: var(--accent-gold, #C8AE7D);
+  cursor: pointer;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.chip-toggle-btn:hover,
+.result-detail-btn:hover {
+  background: rgba(200, 174, 125, 0.15);
+}
+
+.tool-chip-details,
+.raw-data-box {
   margin-top: 6px;
-  border: 1px solid var(--color-border);
+  padding-top: 6px;
+  border-top: 1px dashed var(--border-light, rgba(200, 174, 125, 0.2));
 }
 
-.tool-name {
-  margin-bottom: 6px;
-}
-
-.tool-args :deep(.n-code) {
+.tool-chip-details :deep(.n-code),
+.raw-data-box :deep(.n-code) {
   font-size: 11px;
   max-height: 120px;
   overflow: auto;
 }
 
-/* 结果卡片 */
-.result-item {
-  margin-top: 8px;
-}
-
-.result-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.result-count {
-  font-size: 11px;
-  color: var(--color-text-secondary);
-}
-
-/* 检索结果卡片横滑（参照数据看板简化版） */
-.records-carousel {
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding-bottom: 8px;
-}
-
-.records-carousel::-webkit-scrollbar {
-  height: 6px;
-}
-
-.records-carousel::-webkit-scrollbar-track {
-  background: var(--color-background-soft);
-  border-radius: 3px;
-}
-
-.records-carousel::-webkit-scrollbar-thumb {
-  background: var(--color-border);
-  border-radius: 3px;
-}
-
-.records-carousel::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-secondary);
-}
-
-.records-track {
-  display: flex;
-  gap: 12px;
-  padding: 4px 0;
-}
-
-/* 记录卡片 - 参照 SimpleRecordCard 简化版 */
-.record-card {
-  flex-shrink: 0;
-  width: 240px;
-  height: 180px; /* 固定高度 */
-  background: var(--color-card-bg, var(--color-background));
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
+/* 工具结果流式条目 */
+.flow-results {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-  transition: all 0.2s ease;
+  gap: 8px;
 }
 
-.record-card:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  transform: translateY(-2px);
-  border-color: rgba(99, 102, 241, 0.3);
-}
-
-[data-theme="dark"] .record-card:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-}
-
-/* 卡片头部 */
-.record-card-header {
-  padding: 10px 12px;
-  border-bottom: 1px dashed var(--color-border);
-  flex-shrink: 0;
-}
-
-.record-card-header .header-left {
+.result-row {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 6px;
 }
 
-.record-card-header .separator {
-  color: var(--color-border);
-  font-size: 10px;
+.result-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
 }
 
-.record-card-header .record-time {
+.status-icon {
   font-size: 11px;
-  color: var(--color-text-secondary);
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-weight: bold;
 }
 
-/* 卡片内容 - 可上下滚动 */
-.record-card-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 10px 12px;
+.status-icon.ok {
+  background: rgba(24, 160, 88, 0.12);
+  color: #18a058;
 }
 
-.record-card-body::-webkit-scrollbar {
-  width: 4px;
+.status-icon.err {
+  background: rgba(208, 48, 80, 0.12);
+  color: #d03050;
 }
 
-.record-card-body::-webkit-scrollbar-thumb {
-  background: var(--color-border);
+.result-tool-name {
+  font-weight: 500;
+  color: var(--text-charcoal, var(--color-text));
+}
+
+.result-brief {
+  font-size: 11px;
+  color: var(--text-muted, #8A7A6A);
+}
+
+/* 扁平微型日记横滑列表 */
+.records-compact-container {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0 4px 0;
+}
+
+.records-compact-container::-webkit-scrollbar {
+  height: 4px;
+}
+
+.records-compact-container::-webkit-scrollbar-thumb {
+  background: var(--border-subtle, rgba(200, 174, 125, 0.3));
   border-radius: 2px;
 }
 
-.record-content {
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--color-text);
+.records-compact-track {
+  display: flex;
+  gap: 8px;
+}
+
+.mini-record-card {
+  flex-shrink: 0;
+  width: 170px;
+  height: 90px;
+  background: var(--bg-parchment-soft, rgba(0, 0, 0, 0.03));
+  border: 1px solid var(--border-light, rgba(200, 174, 125, 0.25));
+  border-radius: 6px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.mini-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+}
+
+.record-type-badge {
+  font-weight: 600;
+  color: var(--accent-gold, #C8AE7D);
+}
+
+.record-date {
+  color: var(--text-muted, #8A7A6A);
+  font-size: 10px;
+}
+
+.mini-card-body {
+  flex: 1;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-charcoal, var(--color-text));
+  overflow-y: auto;
   word-break: break-word;
 }
 
-/* 卡片底部 */
-.record-card-footer {
-  padding: 8px 12px;
-  border-top: 1px dashed var(--color-border);
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--color-text-secondary);
-  flex-shrink: 0;
+.more-hint-clean {
+  font-size: 10px;
+  color: var(--text-muted, #8A7A6A);
+  padding: 2px 4px;
 }
 
-.more-hint {
-  margin-top: 8px;
-  text-align: center;
+/* 最终回答与加载状态极简样式 */
+.final-badge-clean {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #18a058;
+  padding: 2px 0;
+}
+
+.loading-state-clean {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--accent-gold, #C8AE7D);
+  padding: 4px 0;
+}
+
+.loading-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.loading-dots .dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background-color: currentColor;
+  animation: pulse-dot 1.2s infinite ease-in-out;
+}
+
+.loading-dots .dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.loading-dots .dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes pulse-dot {
+  0%, 80%, 100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
 }
 
 /* 非记录类结果 */
@@ -1324,14 +1368,16 @@ const getSignificanceTagType = (result) => {
 
 /* 最终答案标识 */
 .final-badge {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 12px;
-  background: rgba(82, 196, 26, 0.1);
-  border-radius: 6px;
+  padding: 4px 10px;
+  background: rgba(82, 196, 26, 0.08);
+  border: 1px solid rgba(82, 196, 26, 0.25);
+  border-radius: 4px;
   color: #52c41a;
-  font-size: 13px;
+  font-size: 12px;
+  width: fit-content;
 }
 
 /* 加载状态(省略号动画) */
@@ -1339,13 +1385,13 @@ const getSignificanceTagType = (result) => {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px;
-  color: var(--color-text-secondary);
-  font-size: 13px;
+  padding: 10px 12px;
+  color: var(--text-muted, var(--color-text-secondary));
+  font-size: 12px;
 }
 
-.thinking-text {
-  color: var(--color-text);
+.loading-label {
+  color: var(--text-charcoal, var(--color-text));
   font-weight: 500;
 }
 
@@ -1356,10 +1402,10 @@ const getSignificanceTagType = (result) => {
 }
 
 .loading-dots .dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-  background: var(--color-primary);
+  background: var(--accent-gold, #C8AE7D);
   animation: dotPulse 1.4s infinite ease-in-out;
 }
 
@@ -1386,25 +1432,25 @@ const getSignificanceTagType = (result) => {
   }
 }
 
-/* 步骤类型边框颜色 */
-.step-item.step-user_query :deep(.n-collapse-item) {
-  border-left: 3px solid #1890ff;
+/* 步骤类型左侧边框装饰 - 柔和色系 */
+.step-item.step-user_query {
+  border-left: 2px solid rgba(24, 144, 255, 0.5) !important;
 }
 
-.step-item.step-tool_calls :deep(.n-collapse-item) {
-  border-left: 3px solid #722ed1;
+.step-item.step-tool_calls {
+  border-left: 2px solid rgba(114, 46, 209, 0.55) !important;
 }
 
-.step-item.step-final_answer :deep(.n-collapse-item) {
-  border-left: 3px solid #52c41a;
+.step-item.step-final_answer {
+  border-left: 2px solid rgba(82, 196, 26, 0.55) !important;
 }
 
-.step-item.step-loading :deep(.n-collapse-item) {
-  border-left: 3px solid #faad14;
+.step-item.step-loading {
+  border-left: 2px solid var(--accent-gold, #C8AE7D) !important;
 }
 
-.step-item.step-error :deep(.n-collapse-item) {
-  border-left: 3px solid #ff4d4f;
+.step-item.step-error {
+  border-left: 2px solid rgba(255, 77, 79, 0.6) !important;
 }
 
 /* 响应式 */

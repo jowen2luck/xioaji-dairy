@@ -31,7 +31,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <NConfigProvider :theme="theme">
+  <NConfigProvider :theme="theme" class="app-root-provider">
     <NDialogProvider>
       <NMessageProvider>
         <Dashboard />
@@ -41,4 +41,10 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.app-root-provider {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  display: block;
+}
 </style>

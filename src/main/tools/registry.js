@@ -9,6 +9,12 @@ import { SqlAnalysisTool } from './sqlAnalysis.js'
 import { CalendarResolverTool } from './calendar.js'
 import { MetadataExplorerTool } from './metadata.js'
 import { InsightAnalystTool } from './insight.js'
+import { GetRecordDetailTool } from './getRecordDetail.js'
+import { CoreMemoryTool } from './coreMemory.js'
+import { CreateRecordTool } from './createRecord.js'
+import { UpdateRecordTool } from './updateRecord.js'
+import { DeleteRecordTool } from './deleteRecord.js'
+import { ManageMemoTool } from './manageMemo.js'
 
 export class ToolRegistry {
   constructor() {
@@ -17,17 +23,23 @@ export class ToolRegistry {
   }
 
   registerDefaultTools() {
-    // 核心查询工具
+    // 核心记录与查询工具
+    this.register(new CreateRecordTool())
+    this.register(new UpdateRecordTool())
+    this.register(new DeleteRecordTool())
+    this.register(new ManageMemoTool())
     this.register(new SearchRecordsTool())
     this.register(new QueryRecordsTool())
+    this.register(new GetRecordDetailTool())
     
     // 统计和分析工具
     this.register(new SqlAnalysisTool())
     this.register(new InsightAnalystTool())
     
-    // 辅助工具
+    // 辅助与记忆工具
     this.register(new CalendarResolverTool())
     this.register(new MetadataExplorerTool())
+    this.register(new CoreMemoryTool())
     
     console.log('[ToolRegistry] Registered default tools:', Array.from(this.tools.keys()))
   }

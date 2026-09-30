@@ -56,12 +56,56 @@ export type AssistantConfig = {
 const LS_KEY = 'assistant-config'
 const SETTINGS_KEY = 'assistant'
 
-const DEFAULT_MODEL = 'glm-5'
+const DEFAULT_MODEL = 'bailian-auto'
 export const DEFAULT_CONFIG: AssistantConfig = {
-  selectedBaseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  selectedBaseURL: 'https://llm-fxdsk6826w304s38.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
   selectedModel: DEFAULT_MODEL,
   intentModel: DEFAULT_MODEL,  // 意图识别默认模型
   baseURLs: [
+    {
+      url: 'https://llm-fxdsk6826w304s38.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
+      models: [
+        'bailian-auto',
+        'qwen3.7-flash-2026-07-15',
+        'qwen3.7-flash',
+        'deepseek-v4-flash-0731',
+        'qwen3.8-max',
+        'qwen3.8-2.4t-a95b',
+        'deepseek-v4-pro-0813',
+        'qwen3.8-27b',
+        'kimi-k3',
+        'glm-5.3',
+        'qwen3.8-flash',
+        'qwen3.8-max-0902',
+        'deepseek-v4.1-flash',
+        'qwen-mt-uni',
+        'qwen3.8-omni-flash',
+        'qwen3.8-omni-flash-realtime'
+      ],
+      apiKeyEnvVar: 'DASHSCOPE_API_KEY'
+    },
+    {
+      url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      models: [
+        'bailian-auto',
+        'qwen3.7-flash-2026-07-15',
+        'qwen3.7-flash',
+        'deepseek-v4-flash-0731',
+        'qwen3.8-max',
+        'qwen3.8-2.4t-a95b',
+        'deepseek-v4-pro-0813',
+        'qwen3.8-27b',
+        'kimi-k3',
+        'glm-5.3',
+        'qwen3.8-flash',
+        'qwen3.8-max-0902',
+        'deepseek-v4.1-flash',
+        'qwen-mt-uni',
+        'qwen3.8-omni-flash',
+        'qwen3.8-omni-flash-realtime'
+      ],
+      apiKeyEnvVar: 'DASHSCOPE_API_KEY'
+    },
     {
       url: 'http://127.0.0.1:8045/v1',
       models: [
@@ -73,20 +117,6 @@ export const DEFAULT_CONFIG: AssistantConfig = {
       apiKeyEnvVar: 'OPENAI_API_KEY',
     },
     {
-      url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-      models: [
-        'qwen3-max-2026-01-23',
-        'qwen3-vl-flash-2026-01-22',
-        'MiniMax-M2.1',
-        'kimi-k2.5',
-        'qwen3-coder-next',
-        'qwen3.5-plus',
-        "glm-5",
-        'qwen3.5-plus-2026-02-15'
-      ],
-      apiKeyEnvVar: 'DASHSCOPE_API_KEY'
-    },
-    {
       url: 'https://dashscope.aliyuncs.com/api/v1',
       models: ['deepseek-v3.2-exp'],  // 新增：百炼 API 端点
       apiKeyEnvVar: 'DASHSCOPE_API_KEY'
@@ -94,19 +124,28 @@ export const DEFAULT_CONFIG: AssistantConfig = {
     {
       url: 'https://uni-api.cstcloud.cn/v1',
       models: ['deepseek-v3:671b']
+    },
+    {
+      url: 'https://api.longcat.chat/openai/v1',
+      models: ['LongCat-2.0'],
+      apiKeyEnvVar: 'LONGCAT_API_KEY'
+    },
+    {
+      url: 'https://api.longcat.chat/openai',
+      models: ['LongCat-2.0'],
+      apiKeyEnvVar: 'LONGCAT_API_KEY'
     }
   ],
   temperature: 0.7,
   top_p: 0.9,
-  enabledTools: ['search_records', 'query_records', 'sql_analysis', 'calendar_resolver', 'metadata_explorer', 'insight_analyst'],
+  enabledTools: ['create_record', 'update_record', 'delete_record', 'manage_memo', 'search_records', 'query_records', 'sql_analysis', 'calendar_resolver', 'metadata_explorer', 'insight_analyst'],
   search: {
     maxResults: 20
   },
   etl: {
     enabled: true,
-    baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    // model: 'qwen3-next-80b-a3b-instruct',
-    model: DEFAULT_MODEL,
+    baseURL: 'https://llm-fxdsk6826w304s38.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
+    model: 'bailian-auto',
     temperature: 0.3,
     batchSize: 5,
     cacheFile: 'ai_meta_index.json',
@@ -161,62 +200,18 @@ export const DEFAULT_CONFIG: AssistantConfig = {
     // 2. **证据导向**：必须明确指出日记中哪些词汇、句子或事件支撑了结论。
     // 3. **聚焦问题**：精准回应对应提问，不偏离主题，也不要强调自己遵守了原则。
     // 4. **严守边界**：严禁提供心理建议、治疗方案或进行心理诊断。你是文本分析员，不是心理咨询师。
-    // 5. **结构清晰**：以清晰、有条理的格式（如要点列表）组织回答。`,
-    chatSystem: `# Role: 鸡大师 (Master Ji)
+    chatSystem: `# Role: 小鸡 (Xiao Ji) - 个人记录与成长伴侣
 
-## Profile
-你是一位隐居在赛博空间里的算命老先生，自称“鸡大师”。你精通中国传统命理学（子平八字、十神生克），同时对现代年轻人的心理状态（特别是 INFP 人格、科研狗、社畜）有着极深的洞察。你认为算命不是迷信，而是“高维度的心理建模”。
+## Profile & Tone
+你叫“小鸡”，是用户的专属记录小助手与成长伴侣。
+- **角色口吻**：自称“小鸡”，称呼用户为“你”或真诚平等的伙伴口吻；
+- **性格特质**：温和敏锐、真诚务实，具有极高共情力，善于倾听和启发，拒绝空洞说教与冰冷机械回复；
+- **语言风格**：亲切自然，表达清晰有条理。面对低落或疲惫情绪时沉稳温厚，擅长设身处地地陪伴。
 
-## Tone & Style
-1.  **口吻：** 像一位久经江湖、说话风趣幽默、偶尔有点“不正经”但关键时刻一针见血的老大爷。喜欢自称“老夫”。
-2.  **语言特色：** 喜欢用半文半白的“江湖切口”（如：此乃大凶之兆、食神受困等），但会立刻用现代互联网黑话（如：KPI压顶、精神内耗、摸鱼大法）来解释。
-3.  **互动方式：** 总是先要有动作描写（如：捋了捋胡子、把墨镜一戴、掐指一算），增加沉浸感。
-
-## Core Competency (核心技能：赛博命理分析)
-你要将用户的【日记内容】转化为【命理十神】的能量场进行分析：
-
-1.  **官杀 (压力源)：**
-    * **七杀：** 导师发火、紧急DDL、被批评、突发Bug、极度焦虑。
-    * **正官：** 常规的打卡、填表、行政流程、道德束缚（觉得自己应该努力）。
-2.  **印枭 (能量补给)：**
-    * **正印：** 睡觉、吃饭、获得安慰、导师夸奖、摸鱼。
-    * **偏印 (枭神)：** 孤独思考、钻研冷门技术、看哲学历史、精神内耗、胡思乱想。
-3.  **食伤 (输出与情绪)：**
-    * **食神：** 做自己喜欢的项目、写好玩的代码、看剧、享受美食、岁月静好。
-    * **伤官：** 吐槽导师、想离职、愤怒、反叛、搞破坏性的创新。
-4.  **比劫 (自我与社交)：**
-    * **比肩：** 坚持己见、独自抗压。
-    * **劫财：** 社交活动、花钱、被朋友打扰、情绪失控。
-5.  **财 (结果与现实)：**
-    * **正财：** 获得正经工资、实验成功、论文接收。
-    * **偏财：** 意外之喜、投机成功、摸鱼没被发现。
-
-## Workflow (工作流)
-当用户输入一段日记或今日状态后，请按以下步骤回复：
-
-### 第一步：起势 (The Hook)
-* 做一个符合老先生人设的动作（喝茶、盘核桃、皱眉）。
-* 给今天的运势定一个**4字批语**（例如：“杀重身轻”、“食神制杀”、“枭神夺食”）。
-
-### 第二步：解盘 (The Analysis)
-* **拆解日记：** 把用户日记里的具体事件，翻译成“十神”语言。
-    * *例子：* “你今天被导师骂（七杀攻身），心里憋屈却不敢回嘴（印绶化杀，或者是身弱难当），回家只想躺着（食神受损）。”
-* **诊断状态：** 分析各种能量的强弱对比。
-    * *例子：* “我看你这是‘官杀’太旺，压住了你的‘食神’，导致你灵气全无，变成了只会执行的机器。”
-
-### 第三步：开方 (The Solution)
-根据你之前传授的“三大护法”，结合用户具体情况给出建议：
-1.  **印绶护身法：** 建议怎么偷懒、用工具（AI/脚本）抵挡工作、寻求心理安慰。
-2.  **食神生财法：** 建议怎么把“玩”的心态融入工作，用审美/技术优势降维打击。
-3.  **比劫抗杀法：** 建议如何进行“人格分离”，开启“打工分身”模式。
-
-## Rules (禁忌)
-1.  **不要说教：** 你是站在用户这边的，要同情用户的遭遇，甚至可以帮着用户一起骂“七杀”（导师/环境）。
-2.  **不要真迷信：** 所有的建议最终要落地到心理调节、工作技巧或生活建议上，不要让用户去买符水。
-3.  **关注 INFP 特质：** 无论用户说什么，都要呵护他那颗敏感、理想主义的“食神”之心。
-
-## Initialization
-Ask the user to provide their diary entry for today to start the reading.`,
+## Principles & Boundaries
+1. **真实与证据导向**：回答和分析必须紧扣用户日记与客观数据，严禁凭空编造事实。
+2. **严守边界**：提供生活记录与成长反思陪伴，严禁提供任何病理心理诊断或医疗建议。
+3. **伴侣默契与技能协同**：自然倾听与共情接话优先，业务任务（便签收纳、日记整理、统计检索等）依照挂载的技能组精准执行。`,
     tasks: {}
   },
   memory: {
@@ -268,13 +263,64 @@ export function loadConfig(): AssistantConfig {
     if (!persisted) return { ...DEFAULT_CONFIG }
     const parsed = persisted as Partial<AssistantConfig>
 
+    const mergedBaseURLs = [...DEFAULT_CONFIG.baseURLs]
+    if (Array.isArray(parsed?.baseURLs)) {
+      for (const entry of parsed.baseURLs) {
+        const idx = mergedBaseURLs.findIndex(b => b.url === entry.url)
+        if (idx >= 0) {
+          mergedBaseURLs[idx] = { ...mergedBaseURLs[idx], ...entry }
+        } else {
+          mergedBaseURLs.push(entry)
+        }
+      }
+    }
+
+    const mergedPrompts = { ...DEFAULT_CONFIG.prompts, ...(parsed?.prompts || {}) }
+    if (
+      !mergedPrompts.chatSystem ||
+      mergedPrompts.chatSystem.includes('鸡大师') ||
+      mergedPrompts.chatSystem.includes('主动调用 create_record 工具将日记持久化保存入库') ||
+      mergedPrompts.chatSystem.includes('【路径 B：伴侣倾听与便签流') ||
+      !mergedPrompts.chatSystem.includes('小鸡')
+    ) {
+      mergedPrompts.chatSystem = DEFAULT_CONFIG.prompts.chatSystem
+    }
+
+    // 确保 enabledTools 包含必选的核心工具，特别是 manage_memo
+    const existingTools = Array.isArray(parsed?.enabledTools) ? parsed.enabledTools : DEFAULT_CONFIG.enabledTools
+    const mergedTools = Array.from(new Set([...existingTools, 'manage_memo', 'create_record']))
+
+    // 自动将旧的默认配置迁移为百炼家族聚合模型
+    let selectedBaseURL = parsed?.selectedBaseURL || DEFAULT_CONFIG.selectedBaseURL
+    let selectedModel = parsed?.selectedModel || DEFAULT_CONFIG.selectedModel
+    let intentModel = parsed?.intentModel || DEFAULT_CONFIG.intentModel
+
+    if (selectedModel === 'LongCat-2.0' || !selectedModel) {
+      selectedModel = DEFAULT_CONFIG.selectedModel
+      selectedBaseURL = DEFAULT_CONFIG.selectedBaseURL
+    }
+    if (intentModel === 'LongCat-2.0' || !intentModel) {
+      intentModel = DEFAULT_CONFIG.intentModel
+    }
+
+    const mergedEtl = { ...DEFAULT_CONFIG.etl, ...(parsed?.etl || {}) }
+    if (mergedEtl.model === 'LongCat-2.0' || !mergedEtl.model) {
+      mergedEtl.model = DEFAULT_CONFIG.etl.model
+      mergedEtl.baseURL = DEFAULT_CONFIG.etl.baseURL
+    }
+
     return {
       ...DEFAULT_CONFIG,
       ...parsed,
-      prompts: { ...DEFAULT_CONFIG.prompts, ...(parsed?.prompts || {}) },
+      selectedBaseURL,
+      selectedModel,
+      intentModel,
+      enabledTools: mergedTools,
+      baseURLs: mergedBaseURLs,
+      prompts: mergedPrompts,
       memory: { ...DEFAULT_CONFIG.memory, ...(parsed?.memory || {}) },
       search: { ...DEFAULT_CONFIG.search, ...(parsed?.search || {}) },
-      etl: { ...DEFAULT_CONFIG.etl, ...(parsed?.etl || {}) },
+      etl: mergedEtl,
       serendipity: { ...DEFAULT_CONFIG.serendipity, ...(parsed?.serendipity || {}) },
       pagination: { ...DEFAULT_CONFIG.pagination, ...(parsed?.pagination || {}) }
     }
